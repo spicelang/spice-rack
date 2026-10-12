@@ -18,7 +18,7 @@ COPY scripts/build-wasm.sh ./scripts/build-wasm.sh
 RUN ./scripts/build-wasm.sh /out/rack.wasm
 
 # ---- Stage 2: Node.js host (HTTP, MySQL, GitHub calls) + the wasm module ----------------------------------------------
-FROM node:22-bookworm-slim
+FROM node:26-bookworm-slim
 ENV NODE_ENV=production \
     PORT=8080 \
     WASM_PATH=/app/rack.wasm \
