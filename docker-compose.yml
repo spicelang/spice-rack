@@ -1,9 +1,8 @@
-# Spice Rack: MySQL + the registry app + Caddy as TLS-terminating reverse proxy.
+# Spice Rack: MySQL + the registry app + nginx as TLS-terminating reverse proxy (+ certbot for Let's Encrypt).
 #
-#   cp .env.example .env     # fill in the secrets
+#   cp .env.example .env          # fill in the secrets
+#   scripts/init-tls.sh           # obtains the certificate (DOMAIN=localhost: self-signed); ports 80/443 must be reachable
 #   docker compose up -d --build
-#
-# Caddy obtains and renews the certificate for $DOMAIN automatically; ports 80 and 443 must be reachable.
 services:
   db:
     image: mysql:26.7
@@ -41,25 +40,33 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       ADMIN_LOGINS: ${ADMIN_LOGINS:-}
       SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES:-15}
-    # Not published: only Caddy talks to the app
+    # Not published: only nginx talks to the app
 
-  caddy:
-    image: caddy:2-alpine
+  nginx:
+    image: nginx:1-alpine
     restart: unless-stopped
     depends_on:
       - app
     ports:
       - "80:80"
       - "443:443"
-      - "443:443/udp"
     environment:
       DOMAIN: ${DOMAIN:-rack.spicelang.com}
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
+      - ./nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./data/letsencrypt:/etc/letsencrypt:ro
+      - ./data/certbot-www:/var/www/certbot:ro
+    # Reload periodically to pick up renewed certificates
+    command: ["/bin/sh", "-c", "while :; do sleep 6h; nginx -s reload; done & exec /docker-entrypoint.sh nginx -g 'daemon off;'"]
+
+  # Renews the Let's Encrypt certificate (created once with scripts/init-tls.sh)
+  certbot:
+    image: certbot/certbot
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c", "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done"]
+    volumes:
+      - ./data/letsencrypt:/etc/letsencrypt
+      - ./data/certbot-www:/var/www/certbot
 
 volumes:
   db-data:
-  caddy-data:
-  caddy-config:

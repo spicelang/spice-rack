@@ -46,13 +46,16 @@ public/         CSS and favicon
 1. Create a GitHub OAuth app (Settings → Developer settings → OAuth Apps) with the callback URL
    `https://rack.spicelang.com/auth/github/callback`.
 2. `cp .env.example .env` and fill in the passwords, the OAuth client id/secret and `ADMIN_LOGINS` (your GitHub login).
-3. Point the DNS record of `DOMAIN` at the server and run `docker compose up -d --build`.
+3. Point the DNS record of `DOMAIN` at the server (ports 80 and 443 open) and run `scripts/init-tls.sh` once to obtain the
+   Let's Encrypt certificate, then `docker compose up -d --build`. Certificates are stored in `./data/letsencrypt` and renewed by
+   the `certbot` service; nginx reloads every 6 hours to pick them up.
+   For local use, `DOMAIN=localhost scripts/init-tls.sh` creates a self-signed certificate instead.
 
 `docker-compose.yml` starts MySQL 26.7 (persistent volume), the app (the `Dockerfile` downloads the Spice release given by
-`SPICE_VERSION`, compiles the wasm module and ships it with the Node host) and Caddy, which terminates TLS with an automatic
-Let's Encrypt certificate. The schema is migrated on startup. Back up the `db-data` volume (or use `mysqldump`).
+`SPICE_VERSION`, compiles the wasm module and ships it with the Node host) and nginx, which terminates TLS (Let's Encrypt via
+certbot, renewed automatically). The schema is migrated on startup. Back up the `db-data` volume (or use `mysqldump`).
 
-Without Caddy (own proxy): publish port 8080 of `app`, set `TRUST_PROXY=1` only if a proxy sets `X-Forwarded-For`.
+Without nginx (own proxy): publish port 8080 of `app`, set `TRUST_PROXY=1` only if a proxy sets `X-Forwarded-For`.
 
 ### Configuration
 
