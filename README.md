@@ -48,7 +48,7 @@ public/         CSS and favicon
 2. `cp .env.example .env` and fill in the passwords, the OAuth client id/secret and `ADMIN_LOGINS` (your GitHub login).
 3. Point the DNS record of `DOMAIN` at the server and run `docker compose up -d --build`.
 
-`docker-compose.yml` starts MySQL 8.4 (persistent volume), the app (the `Dockerfile` downloads the Spice release given by
+`docker-compose.yml` starts MySQL 26.7 (persistent volume), the app (the `Dockerfile` downloads the Spice release given by
 `SPICE_VERSION`, compiles the wasm module and ships it with the Node host) and Caddy, which terminates TLS with an automatic
 Let's Encrypt certificate. The schema is migrated on startup. Back up the `db-data` volume (or use `mysqldump`).
 
@@ -87,7 +87,7 @@ API: `GET /api/v1/packages?q=&tag=&owner=&sort=&page=` · `/api/v1/packages/{nam
 scripts/build-wasm.sh                 # needs the spice compiler (SPICE=/path/to/spice) and wasm-ld (package lld)
 spice test src/tests.spice            # Spice unit tests
 cd host && npm install
-docker run -d --name rack-db -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=rack_test -e MYSQL_USER=rack -e MYSQL_PASSWORD=rack -p 3307:3306 mysql:8.4
+docker run -d --name rack-db -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=rack_test -e MYSQL_USER=rack -e MYSQL_PASSWORD=rack -p 3307:3306 mysql:26.7
 E2E_DB_PORT=3307 E2E_DB_NAME=rack_test npm test   # end-to-end: real wasm + MySQL, mocked GitHub
 DB_PORT=3307 DB_NAME=rack_test node dev/seed.mjs  # demo data (+ a ready-made admin session cookie), then: node server.mjs
 ```
