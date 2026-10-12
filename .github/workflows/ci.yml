@@ -64,4 +64,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build the image
-        run: docker build --build-arg SPICE_VERSION="$SPICE_VERSION" -t spice-rack:ci .
+        run: docker build -t spice-rack:ci .
