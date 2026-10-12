@@ -25,7 +25,7 @@ jobs:
           --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot --silent"
           --health-interval=5s --health-timeout=5s --health-retries=30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install toolchain (clang, lld)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld
@@ -62,6 +62,6 @@ jobs:
   docker:
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build the image
         run: docker build -t spice-rack:ci .
