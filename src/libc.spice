@@ -1,0 +1,147 @@
+// Minimal libc replacement for the wasm32 build.
+//
+// WebAssembly modules cannot link against the C library, but the Spice runtime and std (String, Vector, ...) rely on
+// a handful of its functions. They are provided here. Memory is handed out by a bump allocator over a region the host
+// passes in via rackInit(). Since every request is handled by a stateless call, the host simply resets the arena
+// before each request, so free() can be a no-op and there is no fragmentation to worry about.
+
+long ARENA_START = 0l;
+long ARENA_END = 0l;
+long ARENA_CURSOR = 0l;
+long LAST_ALLOC = 0l;
+long LAST_ALLOC_SIZE = 0l;
+
+/**
+ * Hand the allocator its memory region and reset it. Called by the host before each request.
+ */
+#[core.compiler.mangle = false]
+public p rackArenaReset(unsigned int start, unsigned int end) {
+    ARENA_START = (cast<unsigned long>(start) + 15l) & ~15l;
+    ARENA_END = cast<unsigned long>(end);
+    ARENA_CURSOR = ARENA_START;
+    LAST_ALLOC = 0l;
+    LAST_ALLOC_SIZE = 0l;
+}
+
+/**
+ * Reserve a buffer of the given size and return its address, for the host to write the input into
+ */
+#[core.compiler.mangle = false]
+public f<unsigned int> rackAlloc(unsigned int size) {
+    heap byte* block = malloc(cast<unsigned long>(size));
+    unsafe { return cast<unsigned int>(cast<unsigned long>(block)); }
+}
+
+#[core.compiler.mangle = false]
+public f<unsigned int> rackArenaUsed() {
+    return cast<unsigned int>(ARENA_CURSOR - ARENA_START);
+}
+
+#[core.compiler.mangle = false]
+public f<heap byte*> malloc(unsigned long size) {
+    const unsigned long aligned = (size + 15l) & ~15l;
+    if ARENA_CURSOR + aligned > ARENA_END { return nil<heap byte*>; }
+    const unsigned long addr = ARENA_CURSOR;
+    ARENA_CURSOR += aligned;
+    LAST_ALLOC = addr;
+    LAST_ALLOC_SIZE = aligned;
+    unsafe { return cast<heap byte*>(addr); }
+}
+
+#[core.compiler.mangle = false]
+public p free(heap byte* ptr) {
+    // Memory is reclaimed in bulk when the arena is reset. Forget the pointer, so it is not freed by the runtime.
+    unsafe { cast<unsigned long>(ptr); }
+}
+
+#[core.compiler.mangle = false]
+public f<heap byte*> realloc(heap byte* ptr, unsigned long size) {
+    unsafe {
+        const unsigned long oldAddr = cast<unsigned long>(ptr);
+        if oldAddr == 0l { return malloc(size); }
+        // Growing the most recent allocation can happen in place
+        if oldAddr == LAST_ALLOC {
+            const unsigned long aligned = (size + 15l) & ~15l;
+            if LAST_ALLOC + aligned > ARENA_END { return nil<heap byte*>; }
+            ARENA_CURSOR = LAST_ALLOC + aligned;
+            LAST_ALLOC_SIZE = aligned;
+            return cast<heap byte*>(oldAddr);
+        }
+        heap byte* newPtr = malloc(size);
+        if newPtr == nil<heap byte*> { return nil<heap byte*>; }
+        memcpy(newPtr, cast<heap byte*>(oldAddr), size);
+        return newPtr;
+    }
+}
+
+#[core.compiler.mangle = false]
+public f<heap byte*> memcpy(heap byte* dst, heap byte* src, unsigned long n) {
+    unsafe {
+        byte* d = cast<byte*>(dst);
+        byte* s = cast<byte*>(src);
+        for unsigned long i = 0l; i < n; i++ { d[i] = s[i]; }
+    }
+    return dst;
+}
+
+#[core.compiler.mangle = false]
+public f<heap byte*> memmove(heap byte* dst, heap byte* src, unsigned long n) {
+    unsafe {
+        byte* d = cast<byte*>(dst);
+        byte* s = cast<byte*>(src);
+        if cast<unsigned long>(d) < cast<unsigned long>(s) {
+            for unsigned long i = 0l; i < n; i++ { d[i] = s[i]; }
+        } else {
+            for unsigned long i = n; i > 0l; i-- { d[i - 1l] = s[i - 1l]; }
+        }
+    }
+    return dst;
+}
+
+#[core.compiler.mangle = false]
+public f<int> memcmp(heap byte* a, heap byte* b, unsigned long n) {
+    unsafe {
+        byte* pa = cast<byte*>(a);
+        byte* pb = cast<byte*>(b);
+        for unsigned long i = 0l; i < n; i++ {
+            if pa[i] != pb[i] { return cast<int>(pa[i]) - cast<int>(pb[i]); }
+        }
+    }
+    return 0;
+}
+
+#[core.compiler.mangle = false]
+public f<unsigned long> strlen(string s) {
+    unsigned long len = 0l;
+    unsafe {
+        byte* bytes = cast<byte*>(s);
+        while bytes[len] != cast<byte>(0) { len++; }
+    }
+    return len;
+}
+
+#[core.compiler.mangle = false]
+public f<int> strcmp(string a, string b) {
+    unsafe {
+        byte* pa = cast<byte*>(a);
+        byte* pb = cast<byte*>(b);
+        unsigned long i = 0l;
+        while pa[i] != cast<byte>(0) && pa[i] == pb[i] { i++; }
+        return cast<int>(pa[i]) - cast<int>(pb[i]);
+    }
+}
+
+// Provided by the host: aborts the current request with the given message
+ext p hostAbort(string);
+
+#[core.compiler.mangle = false]
+public p exit(int code) {
+    hostAbort("The Spice runtime requested to exit");
+}
+
+// The runtime prints diagnostics to stderr. There is no stderr in the browser, so just swallow it.
+#[core.compiler.mangle = false]
+public f<int> fprintf(byte* stream, string format, byte* args) { return 0; }
+
+#[core.compiler.mangle = false]
+public f<unsigned int> fwrite(byte* data, unsigned int size, unsigned int count, byte* stream) { return count; }

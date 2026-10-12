@@ -1,0 +1,288 @@
+import "std/data/vector";
+import "./util";
+import "./json";
+import "./core";
+import "./layout";
+import "./search";
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Admin area: usage dashboard, maintainer accounts and the package list
+// ---------------------------------------------------------------------------------------------------------------------
+
+const long ADMIN_PAGE_SIZE = 25l;
+
+f<String> adminNav(const String& active) {
+    String h = String("<nav class=\"subnav container\" aria-label=\"Admin\">");
+    h += String("<a class=\"") + (active == "overview" ? "active" : "") + "\" href=\"/admin\">Overview</a>";
+    h += String("<a class=\"") + (active == "users" ? "active" : "") + "\" href=\"/admin/users\">Maintainers</a>";
+    h += String("<a class=\"") + (active == "packages" ? "active" : "") + "\" href=\"/admin/packages\">Packages</a>";
+    return h + "</nav>";
+}
+
+f<String> tile(const String& value, const String& label) {
+    return String("<div class=\"tile\"><span class=\"tile-value\">") + value + "</span><span class=\"tile-label\">" + esc(label) + "</span></div>";
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Overview
+// ---------------------------------------------------------------------------------------------------------------------
+
+public f<String> handleAdminHome(Ctx& ctx) {
+    if !ctx.user.present { return requireLogin(ctx); }
+    if !ctx.isAdmin() { return forbidden(ctx); }
+    if ctx.step() == 0 {
+        Batch batch;
+        batch.simple("SELECT (SELECT COUNT(*) FROM users) AS users, (SELECT COUNT(*) FROM users WHERE role = 'admin') AS admins, " +
+                     String("(SELECT COUNT(*) FROM users WHERE status = 'suspended') AS suspended, (SELECT COUNT(*) FROM packages) AS packages, ") +
+                     "(SELECT COUNT(*) FROM package_versions) AS versions, (SELECT COALESCE(SUM(downloads_total), 0) FROM packages) AS downloads, " +
+                     "(SELECT COALESCE(SUM(downloads), 0) FROM package_stats_daily WHERE day >= UTC_DATE() - INTERVAL 29 DAY) AS downloads_30d, " +
+                     "(SELECT COALESCE(SUM(views), 0) FROM package_stats_daily WHERE day >= UTC_DATE() - INTERVAL 29 DAY) AS views_30d, " +
+                     "(SELECT COUNT(*) FROM packages WHERE synced_at IS NULL OR synced_at < UTC_TIMESTAMP() - INTERVAL 2 DAY) AS stale");
+        batch.simple("WITH RECURSIVE days AS (SELECT UTC_DATE() - INTERVAL 29 DAY AS day UNION ALL SELECT day + INTERVAL 1 DAY FROM days WHERE day < UTC_DATE()) " +
+                     String("SELECT days.day AS day, COALESCE(s.downloads, 0) AS downloads, COALESCE(s.views, 0) AS views FROM days ") +
+                     "LEFT JOIN (SELECT day, SUM(downloads) AS downloads, SUM(views) AS views FROM package_stats_daily GROUP BY day) s ON s.day = days.day ORDER BY days.day");
+        batch.simple("WITH RECURSIVE days AS (SELECT UTC_DATE() - INTERVAL 29 DAY AS day UNION ALL SELECT day + INTERVAL 1 DAY FROM days WHERE day < UTC_DATE()) " +
+                     String("SELECT days.day AS day, COALESCE(u.signups, 0) AS signups FROM days LEFT JOIN ") +
+                     "(SELECT DATE(created_at) AS day, COUNT(*) AS signups FROM users GROUP BY DATE(created_at)) u ON u.day = days.day ORDER BY days.day");
+        batch.simple("SELECT p.name, p.downloads_total, COALESCE(SUM(s.downloads), 0) AS d30, COALESCE(SUM(s.views), 0) AS v30 FROM packages p " +
+                     String("LEFT JOIN package_stats_daily s ON s.package_id = p.id AND s.day >= UTC_DATE() - INTERVAL 29 DAY ") +
+                     "GROUP BY p.id, p.name, p.downloads_total ORDER BY d30 DESC, p.downloads_total DESC, p.name LIMIT 10");
+        batch.simple("SELECT login, display_name, role, created_at FROM users ORDER BY created_at DESC, id DESC LIMIT 8");
+        batch.simple("SELECT p.name, p.created_at, u.login AS owner_login FROM packages p JOIN users u ON u.id = p.owner_id ORDER BY p.created_at DESC, p.id DESC LIMIT 8");
+        return batch.finish();
+    }
+    JV totalsRows = ctx.rows(0, 0l);
+    JV t = totalsRows.first();
+    JV usage = ctx.rows(0, 1l);
+    JV signups = ctx.rows(0, 2l);
+    JV top = ctx.rows(0, 3l);
+    JV recentUsers = ctx.rows(0, 4l);
+    JV recentPackages = ctx.rows(0, 5l);
+
+    Vector<String> labels;
+    Vector<long> downloads;
+    Vector<long> views;
+    for JV day = usage.first(); day.exists(); day = day.after() {
+        labels.pushBack(day.getStr("day"));
+        downloads.pushBack(day.getNum("downloads"));
+        views.pushBack(day.getNum("views"));
+    }
+    Vector<String> signupLabels;
+    Vector<long> signupValues;
+    for JV day = signups.first(); day.exists(); day = day.after() {
+        signupLabels.pushBack(day.getStr("day"));
+        signupValues.pushBack(day.getNum("signups"));
+    }
+
+    String h = String("<div class=\"page-title\"><div class=\"container\"><h1>Administration</h1><p class=\"muted\">Usage of the registry at a glance.</p></div></div>");
+    h += adminNav(String("overview")) + "<div class=\"container section\"><div class=\"tiles\">";
+    h += tile(fmtThousands(t.getNum("packages")), String("Packages")) + tile(fmtThousands(t.getNum("versions")), String("Versions"));
+    h += tile(fmtThousands(t.getNum("users")), String("Maintainer accounts")) + tile(fmtThousands(t.getNum("downloads")), String("Downloads, all time"));
+    h += tile(fmtThousands(t.getNum("downloads_30d")), String("Downloads, 30 days")) + tile(fmtThousands(t.getNum("views_30d")), String("Page views, 30 days"));
+    h += tile(fmtThousands(t.getNum("admins")), String("Administrators")) + tile(fmtThousands(t.getNum("suspended")), String("Suspended accounts"));
+    h += tile(fmtThousands(t.getNum("stale")), String("Packages not synced for 2 days")) + "</div>";
+
+    h += "<section class=\"panel\">" + barChart(String("Downloads per day (all packages)"), labels, downloads, String("downloads")) + "</section>";
+    h += "<section class=\"panel\">" + barChart(String("Page views per day (all packages)"), labels, views, String("views")) + "</section>";
+    h += "<section class=\"panel\">" + barChart(String("New maintainer accounts per day"), signupLabels, signupValues, String("sign-ups")) + "</section>";
+
+    h += "<div class=\"columns-2\"><section class=\"panel\"><h2>Top packages (30 days)</h2><table class=\"table\"><thead><tr><th>Package</th><th class=\"num\">Downloads</th><th class=\"num\">Views</th><th class=\"num\">All time</th></tr></thead><tbody>";
+    for JV row = top.first(); row.exists(); row = row.after() {
+        h += "<tr><td><a href=\"/packages/" + urlEncode(row.getStr("name")) + "\">" + esc(row.getStr("name")) + "</a></td><td class=\"num\">" + fmtThousands(row.getNum("d30")) + "</td>";
+        h += "<td class=\"num\">" + fmtThousands(row.getNum("v30")) + "</td><td class=\"num\">" + fmtThousands(row.getNum("downloads_total")) + "</td></tr>";
+    }
+    if top.size() == 0l { h += "<tr><td colspan=\"4\" class=\"muted\">No packages yet.</td></tr>"; }
+    h += "</tbody></table></section><div>";
+    h += "<section class=\"panel\"><h2>Newest maintainers</h2><ul class=\"plain-list\">";
+    for JV row = recentUsers.first(); row.exists(); row = row.after() {
+        h += "<li><strong>" + esc(row.getStr("login")) + "</strong> <span class=\"muted\">" + esc(row.getStr("role")) + " &middot; joined " + fmtDate(row.getStr("created_at")) + "</span></li>";
+    }
+    h += "</ul><p><a href=\"/admin/users\">Manage maintainers &rarr;</a></p></section>";
+    h += "<section class=\"panel\"><h2>Newest packages</h2><ul class=\"plain-list\">";
+    for JV row = recentPackages.first(); row.exists(); row = row.after() {
+        h += "<li><a href=\"/admin/packages/" + urlEncode(row.getStr("name")) + "\">" + esc(row.getStr("name")) + "</a> <span class=\"muted\">by " + esc(row.getStr("owner_login")) + " &middot; " + fmtDate(row.getStr("created_at")) + "</span></li>";
+    }
+    h += "</ul><p><a href=\"/admin/packages\">Manage packages &rarr;</a></p></section></div></div></div>";
+    return ctx.html(200, layoutPage(ctx, String("Administration"), String("Registry administration"), h));
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Users
+// ---------------------------------------------------------------------------------------------------------------------
+
+f<String> smallForm(const Ctx& ctx, const String& action, const String& field, const String& value, const String& label, const String& cls, const String& confirmText = String("")) {
+    String h = String("<form class=\"inline-form\" method=\"post\" action=\"") + action + "\">" + csrfField(ctx);
+    h += "<input type=\"hidden\" name=\"" + field + "\" value=\"" + esc(value) + "\">";
+    if !confirmText.isEmpty() { h += "<input type=\"hidden\" name=\"confirm\" value=\"yes\">"; }
+    return h + "<button class=\"btn btn-small " + cls + "\" type=\"submit\">" + esc(label) + "</button></form>";
+}
+
+public f<String> handleAdminUsers(Ctx& ctx) {
+    if !ctx.user.present { return requireLogin(ctx); }
+    if !ctx.isAdmin() { return forbidden(ctx); }
+    const String q = head(trimmed(ctx.query.get("q")), 64l);
+    long page = parseLong(ctx.query.get("page"), 1l);
+    if page < 1l { page = 1l; }
+    if ctx.step() == 0 {
+        Batch batch;
+        const String like = String("%") + likeEscape(q) + "%";
+        Sql count = Sql("SELECT COUNT(*) AS total FROM users WHERE 1 = 1");
+        if !q.isEmpty() { count.sql(" AND (login LIKE "); count.ps(like); count.sql(" OR display_name LIKE "); count.ps(like); count.sql(")"); }
+        batch.query(count);
+        Sql list = Sql("SELECT u.id, u.login, u.display_name, u.role, u.status, u.created_at, u.last_login_at, (SELECT COUNT(*) FROM packages p WHERE p.owner_id = u.id) AS packages FROM users u WHERE 1 = 1");
+        if !q.isEmpty() { list.sql(" AND (u.login LIKE "); list.ps(like); list.sql(" OR u.display_name LIKE "); list.ps(like); list.sql(")"); }
+        list.sql(" ORDER BY u.created_at DESC, u.id DESC LIMIT ");
+        list.pn(ADMIN_PAGE_SIZE);
+        list.sql(" OFFSET ");
+        list.pn((page - 1l) * ADMIN_PAGE_SIZE);
+        batch.query(list);
+        return batch.finish();
+    }
+    JV countRows = ctx.rows(0, 0l);
+    JV countRow = countRows.first();
+    const long total = countRow.getNum("total");
+    JV users = ctx.rows(0, 1l);
+
+    String h = String("<div class=\"page-title\"><div class=\"container\"><h1>Maintainers</h1><p class=\"muted\">") + fmtThousands(total) + " accounts</p></div></div>";
+    h += adminNav(String("users")) + "<div class=\"container section\">";
+    h += "<form class=\"toolbar\" method=\"get\" action=\"/admin/users\"><label class=\"sr-only\" for=\"uq\">Search</label><input id=\"uq\" type=\"search\" name=\"q\" value=\"" + esc(q) + "\" placeholder=\"Search by login or name\"><button class=\"btn\" type=\"submit\">Search</button></form>";
+    h += "<div class=\"table-wrap\"><table class=\"table\"><thead><tr><th>Account</th><th>Role</th><th>Status</th><th class=\"num\">Packages</th><th>Joined</th><th>Last sign-in</th><th>Actions</th></tr></thead><tbody>";
+    for JV u = users.first(); u.exists(); u = u.after() {
+        const long id = u.getNum("id");
+        const String login = u.getStr("login");
+        const bool self = id == ctx.user.id;
+        const bool isAdmin = u.getStr("role") == "admin";
+        const bool suspended = u.getStr("status") == "suspended";
+        const String base = String("/admin/users/") + fmtLong(id);
+        h += "<tr><td><img class=\"avatar\" src=\"" + esc(avatarUrl(login)) + "\" alt=\"\" width=\"24\" height=\"24\"> <a href=\"/packages?owner=" + urlEncode(login) + "\"><strong>" + esc(login) + "</strong></a>";
+        h += "<div class=\"muted small\">" + esc(u.getStr("display_name")) + "</div></td>";
+        h += "<td><span class=\"badge " + String(isAdmin ? "badge-ok" : "") + "\">" + esc(u.getStr("role")) + "</span></td>";
+        h += "<td><span class=\"badge " + String(suspended ? "badge-warn" : "") + "\">" + esc(u.getStr("status")) + "</span></td>";
+        h += "<td class=\"num\">" + fmtLong(u.getNum("packages")) + "</td><td>" + fmtDate(u.getStr("created_at")) + "</td><td>" + fmtDate(u.getStr("last_login_at")) + "</td><td class=\"actions\">";
+        if self {
+            h += "<span class=\"muted small\">this is you</span>";
+        } else {
+            h += smallForm(ctx, base + "/role", String("role"), isAdmin ? String("maintainer") : String("admin"), isAdmin ? String("Make maintainer") : String("Make admin"), String(""));
+            h += smallForm(ctx, base + "/status", String("status"), suspended ? String("active") : String("suspended"), suspended ? String("Reactivate") : String("Suspend"), String(""));
+            h += smallForm(ctx, base + "/delete", String("confirm"), String("yes"), String("Delete"), String("btn-danger"), String("yes"));
+        }
+        h += "</td></tr>";
+    }
+    if users.size() == 0l { h += "<tr><td colspan=\"7\" class=\"muted\">No accounts found.</td></tr>"; }
+    h += "</tbody></table></div>";
+    h += pagination(String("/admin/users"), q.isEmpty() ? String("") : String("q=") + urlEncode(q), page, pageCount(total, ADMIN_PAGE_SIZE));
+    h += "<p class=\"muted small\">Suspending an account signs the user out and blocks new sign-ins; their packages stay online. Deleting an account also deletes all of its packages.</p></div>";
+    return ctx.html(200, layoutPage(ctx, String("Maintainers"), String("Manage maintainer accounts"), h));
+}
+
+/**
+ * POST /admin/users/{id}/{role|status|delete}
+ */
+public f<String> handleAdminUserAction(Ctx& ctx, const String& idText, const String& action) {
+    if !ctx.user.present { return requireLogin(ctx); }
+    if !ctx.isAdmin() { return forbidden(ctx); }
+    if !ctx.isPost() { return ctx.redirect(String("/admin/users")); }
+    if !ctx.csrfOk() { return forbidden(ctx); }
+    const long id = parseLong(idText, 0l);
+    if id <= 0l { return notFound(ctx); }
+    if id == ctx.user.id { return badRequest(ctx, String("You cannot change your own account here, so that the registry is never left without an administrator.")); }
+
+    if ctx.step() == 0 {
+        Batch batch;
+        Sql sql = Sql("SELECT id FROM users WHERE id = ");
+        sql.pn(id);
+        batch.query(sql);
+        return batch.finish();
+    }
+    JV found = ctx.rows(0, 0l);
+    if found.size() == 0l { return notFound(ctx); }
+
+    if ctx.step() == 1 {
+        Batch batch;
+        batch.tx = true;
+        if action == "role" {
+            const String role = ctx.form.get("role");
+            if role != "admin" && role != "maintainer" { return badRequest(ctx, String("Unknown role.")); }
+            Sql sql = Sql("UPDATE users SET role = ");
+            sql.ps(role);
+            sql.sql(" WHERE id = ");
+            sql.pn(id);
+            batch.query(sql);
+        } else if action == "status" {
+            const String status = ctx.form.get("status");
+            if status != "active" && status != "suspended" { return badRequest(ctx, String("Unknown status.")); }
+            Sql sql = Sql("UPDATE users SET status = ");
+            sql.ps(status);
+            sql.sql(" WHERE id = ");
+            sql.pn(id);
+            batch.query(sql);
+            if status == "suspended" {
+                Sql sessions = Sql("DELETE FROM sessions WHERE user_id = ");
+                sessions.pn(id);
+                batch.query(sessions);
+            }
+        } else if action == "delete" {
+            if ctx.form.get("confirm") != "yes" { return badRequest(ctx, String("Deleting needs a confirmation.")); }
+            Sql sql = Sql("DELETE FROM users WHERE id = ");
+            sql.pn(id);
+            batch.query(sql);
+        } else {
+            return notFound(ctx);
+        }
+        return batch.finish();
+    }
+    return ctx.redirect(withNotice(String("/admin/users"), action == "delete" ? "userdeleted" : "saved"));
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Packages
+// ---------------------------------------------------------------------------------------------------------------------
+
+public f<String> handleAdminPackages(Ctx& ctx) {
+    if !ctx.user.present { return requireLogin(ctx); }
+    if !ctx.isAdmin() { return forbidden(ctx); }
+    const String q = head(trimmed(ctx.query.get("q")), 64l);
+    long page = parseLong(ctx.query.get("page"), 1l);
+    if page < 1l { page = 1l; }
+    if ctx.step() == 0 {
+        Batch batch;
+        const String like = String("%") + likeEscape(q) + "%";
+        Sql count = Sql("SELECT COUNT(*) AS total FROM packages p JOIN users u ON u.id = p.owner_id WHERE 1 = 1");
+        if !q.isEmpty() { count.sql(" AND (p.name LIKE "); count.ps(like); count.sql(" OR u.login LIKE "); count.ps(like); count.sql(" OR p.repo_name LIKE "); count.ps(like); count.sql(")"); }
+        batch.query(count);
+        Sql list = Sql("SELECT p.name, p.repo_owner, p.repo_name, p.downloads_total, p.synced_at, p.created_at, u.login AS owner_login, lv.version AS latest_version " +
+                       String("FROM packages p JOIN users u ON u.id = p.owner_id LEFT JOIN package_versions lv ON lv.id = p.latest_version_id WHERE 1 = 1"));
+        if !q.isEmpty() { list.sql(" AND (p.name LIKE "); list.ps(like); list.sql(" OR u.login LIKE "); list.ps(like); list.sql(" OR p.repo_name LIKE "); list.ps(like); list.sql(")"); }
+        list.sql(" ORDER BY p.created_at DESC, p.id DESC LIMIT ");
+        list.pn(ADMIN_PAGE_SIZE);
+        list.sql(" OFFSET ");
+        list.pn((page - 1l) * ADMIN_PAGE_SIZE);
+        batch.query(list);
+        return batch.finish();
+    }
+    JV countRows = ctx.rows(0, 0l);
+    JV countRow = countRows.first();
+    const long total = countRow.getNum("total");
+    JV packages = ctx.rows(0, 1l);
+
+    String h = String("<div class=\"page-title\"><div class=\"container title-flex\"><div><h1>Packages</h1><p class=\"muted\">") + fmtThousands(total) + " packages</p></div>";
+    h += "<a class=\"btn btn-primary\" href=\"/admin/packages/new\">New package</a></div></div>";
+    h += adminNav(String("packages")) + "<div class=\"container section\">";
+    h += "<form class=\"toolbar\" method=\"get\" action=\"/admin/packages\"><label class=\"sr-only\" for=\"pq\">Search</label><input id=\"pq\" type=\"search\" name=\"q\" value=\"" + esc(q) + "\" placeholder=\"Search by name, maintainer or repository\"><button class=\"btn\" type=\"submit\">Search</button></form>";
+    h += "<div class=\"table-wrap\"><table class=\"table\"><thead><tr><th>Package</th><th>Maintainer</th><th>Repository</th><th>Latest</th><th class=\"num\">Downloads</th><th>Last sync</th><th></th></tr></thead><tbody>";
+    for JV pk = packages.first(); pk.exists(); pk = pk.after() {
+        const String name = pk.getStr("name");
+        const String version = pk.getStr("latest_version");
+        const String synced = pk.getStr("synced_at");
+        h += "<tr><td><a href=\"/packages/" + urlEncode(name) + "\"><strong>" + esc(name) + "</strong></a></td><td>" + esc(pk.getStr("owner_login")) + "</td>";
+        h += "<td><a href=\"https://github.com/" + esc(urlEncode(pk.getStr("repo_owner"))) + "/" + esc(urlEncode(pk.getStr("repo_name"))) + "\" rel=\"noopener\">" + esc(pk.getStr("repo_owner")) + "/" + esc(pk.getStr("repo_name")) + "</a></td>";
+        h += "<td>" + (version.isEmpty() ? String("&ndash;") : "v" + esc(version)) + "</td><td class=\"num\">" + fmtThousands(pk.getNum("downloads_total")) + "</td>";
+        h += "<td>" + (synced.isEmpty() ? String("never") : fmtDate(synced)) + "</td>";
+        h += "<td class=\"actions\"><a class=\"btn btn-small\" href=\"/admin/packages/" + urlEncode(name) + "\">Edit</a></td></tr>";
+    }
+    if packages.size() == 0l { h += "<tr><td colspan=\"7\" class=\"muted\">No packages found.</td></tr>"; }
+    h += "</tbody></table></div>";
+    h += pagination(String("/admin/packages"), q.isEmpty() ? String("") : String("q=") + urlEncode(q), page, pageCount(total, ADMIN_PAGE_SIZE));
+    h += "</div>";
+    return ctx.html(200, layoutPage(ctx, String("Packages"), String("Manage packages"), h));
+}

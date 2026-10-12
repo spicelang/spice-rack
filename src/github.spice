@@ -1,0 +1,437 @@
+import "std/data/vector";
+import "./util";
+import "./json";
+import "./semver";
+import "./core";
+
+// ---------------------------------------------------------------------------------------------------------------------
+// GitHub integration: OAuth helpers and the synchronisation of package metadata, README, releases and dependencies.
+//
+// A sync consists of three effect batches, which handlers place at consecutive steps (see the *Batch functions):
+//   1. fetch   repository info, README (rendered HTML) and releases (rendered HTML), 3 requests per package
+//   2. manifests   the `spice.json` of the newest releases (declares dependencies)
+//   3. write   one transaction that stores everything
+// ---------------------------------------------------------------------------------------------------------------------
+
+public const string GITHUB_API = "https://api.github.com";
+public const string MANIFEST_FILE = "spice.json";
+const unsigned long MAX_RELEASES = 30l;
+const unsigned long MAX_MANIFESTS = 10l;
+const unsigned long MAX_README_BYTES = 1500000l;
+
+public type SyncJob struct {
+    public long packageId = 0l
+    public String owner
+    public String repo
+}
+
+public type Release struct {
+    public String tag
+    public String version
+    public String title
+    public String body
+    public String bodyHtml
+    public bool prerelease = false
+    public String publishedAt
+    public String tarballUrl
+}
+
+public type Dependency struct {
+    public String name
+    public String constraint
+    public bool dev = false
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// OAuth
+// ---------------------------------------------------------------------------------------------------------------------
+
+public f<String> githubAuthorizeUrl(const Ctx& ctx, const String& state) {
+    return String("https://github.com/login/oauth/authorize?client_id=") + urlEncode(ctx.config.githubClientId) +
+           "&scope=read:user&allow_signup=true&state=" + state +
+           "&redirect_uri=" + urlEncode(ctx.config.baseUrl + "/auth/github/callback");
+}
+
+public f<String> githubTokenRequestBody(const Ctx& ctx, const String& code) {
+    JsonWriter w;
+    w.beginObject();
+    w.kStr("client_id", ctx.config.githubClientId);
+    w.kStr("client_secret", ctx.config.githubClientSecret);
+    w.kStr("code", code);
+    w.kStr("redirect_uri", ctx.config.baseUrl + "/auth/github/callback");
+    w.endObject();
+    return w.finish();
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------------------------------------------------
+
+/**
+ * "2026-10-12T19:43:11Z" -> "2026-10-12 19:43:11"
+ */
+public f<String> toDbTime(const String& iso, const String& fallback) {
+    if iso.getLength() < 19l || iso[10l] != 'T' { return fallback; }
+    return iso.getSubstring(0l, 10l) + " " + iso.getSubstring(11l, 8l);
+}
+
+public f<String> repoApiUrl(const String& owner, const String& repo) {
+    return String(GITHUB_API) + "/repos/" + urlEncode(owner) + "/" + urlEncode(repo);
+}
+
+/**
+ * Whether `text` contains `needle` at offset `at` (no temporary strings, README files can be large)
+ */
+f<bool> matchesAt(const String& text, unsigned long at, string needle) {
+    const unsigned long needleLen = getRawLength(needle);
+    if at + needleLen > text.getLength() { return false; }
+    for unsigned long i = 0l; i < needleLen; i++ {
+        if text[at + i] != needle[i] { return false; }
+    }
+    return true;
+}
+
+/**
+ * GitHub renders relative links of a README relative to the repository. On the registry they have to point back
+ * to GitHub: images to the raw files, everything else to the file view.
+ */
+public f<String> rewriteRelativeLinks(const String& html, const String& owner, const String& repo) {
+    const String rawBase = String("https://raw.githubusercontent.com/") + owner + "/" + repo + "/HEAD/";
+    const String blobBase = String("https://github.com/") + owner + "/" + repo + "/blob/HEAD/";
+    String out;
+    out.reserve(html.getLength() + 64l);
+    const unsigned long len = html.getLength();
+    unsigned long i = 0l;
+    while i < len {
+        const bool boundary = i == 0l || html[i - 1l] == ' ';
+        const bool isSrc = boundary && matchesAt(html, i, "src=\"");
+        const bool isHref = boundary && !isSrc && matchesAt(html, i, "href=\"");
+        if isSrc || isHref {
+            const unsigned long attrLen = isSrc ? 5l : 6l;
+            const long close = html.find('"', i + attrLen);
+            if close < 0l { break; }
+            const unsigned long valueStart = i + attrLen;
+            const unsigned long valueLen = cast<unsigned long>(close) - valueStart;
+            const bool absolute = valueLen == 0l || html[valueStart] == '#' || matchesAt(html, valueStart, "http://") ||
+                                  matchesAt(html, valueStart, "https://") || matchesAt(html, valueStart, "mailto:") ||
+                                  matchesAt(html, valueStart, "data:") || matchesAt(html, valueStart, "//");
+            // Copy the attribute name and the opening quote
+            for unsigned long k = i; k < valueStart; k++ { out.append(html[k]); }
+            unsigned long from = valueStart;
+            if !absolute {
+                out += isSrc ? rawBase : blobBase;
+                while from < cast<unsigned long>(close) && html[from] == '/' { from++; }
+                if matchesAt(html, from, "./") { from += 2l; }
+            }
+            for unsigned long k = from; k < cast<unsigned long>(close); k++ { out.append(html[k]); }
+            i = cast<unsigned long>(close);
+            continue;
+        }
+        out.append(html[i]);
+        i++;
+    }
+    return out;
+}
+
+/**
+ * Releases of a repository as returned by the releases API. Drafts and tags that are not semantic versions are skipped.
+ */
+public f<Vector<Release>> parseReleases(JV releases, const String& owner, const String& repo) {
+    Vector<Release> list;
+    for JV item = releases.first(); item.exists() && list.getSize() < MAX_RELEASES; item = item.after() {
+        if item.getBool("draft") { continue; }
+        Release release;
+        release.tag = item.getStr("tag_name");
+        const Semver parsed = parseSemver(release.tag);
+        if !parsed.valid { continue; }
+        release.version = parsed.toString();
+        release.title = item.getStr("name");
+        release.body = item.getStr("body");
+        release.bodyHtml = item.getStr("body_html");
+        release.prerelease = item.getBool("prerelease") || !parsed.pre.isEmpty();
+        release.publishedAt = toDbTime(item.getStr("published_at"), toDbTime(item.getStr("created_at"), String("1970-01-01 00:00:00")));
+        release.tarballUrl = String("https://github.com/") + owner + "/" + repo + "/archive/refs/tags/" + urlEncode(release.tag) + ".tar.gz";
+        // The same version may appear twice (e.g. "v1.0.0" and "1.0.0"); the first, newest one wins
+        bool duplicate = false;
+        for unsigned long k = 0l; k < list.getSize(); k++ {
+            if list.get(k).version == release.version { duplicate = true; }
+        }
+        if !duplicate { list.pushBack(release); }
+    }
+    return list;
+}
+
+/**
+ * Dependencies declared in a spice.json manifest:
+ *   { "dependencies": { "other-package": "^1.2.0" }, "devDependencies": { ... } }
+ */
+public f<Vector<Dependency>> parseManifestDependencies(JV manifest) {
+    Vector<Dependency> deps;
+    for int pass = 0; pass < 2; pass++ {
+        JV section = manifest.get(pass == 0 ? "dependencies" : "devDependencies");
+        for JV item = section.first(); item.exists() && deps.getSize() < 100l; item = item.after() {
+            Dependency dep;
+            dep.name = lower(item.keyName());
+            const String rawConstraint = item.str();
+            dep.constraint = rawConstraint.trim();
+            if dep.constraint.isEmpty() || dep.constraint.getLength() > 64l { dep.constraint = String("*"); }
+            dep.dev = pass == 1;
+            if !isValidPackageName(dep.name) { continue; }
+            bool duplicate = false;
+            for unsigned long k = 0l; k < deps.getSize(); k++ {
+                if deps.get(k).name == dep.name { duplicate = true; }
+            }
+            if !duplicate { deps.pushBack(dep); }
+        }
+    }
+    return deps;
+}
+
+/**
+ * Index of the release that should be the package's latest version: the highest stable one, or if there is none,
+ * the highest pre-release. Returns -1 for an empty list.
+ */
+public f<long> pickLatestRelease(const Vector<Release>& releases) {
+    Vector<String> versions;
+    for unsigned long i = 0l; i < releases.getSize(); i++ { versions.pushBack(releases.get(i).version); }
+    return pickBestVersion(versions, String("*"));
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Sync batches
+// ---------------------------------------------------------------------------------------------------------------------
+
+/**
+ * Batch 1: repo, readme and releases for every job
+ */
+public f<String> syncFetchBatch(const Ctx& ctx, const Vector<SyncJob>& jobs) {
+    Batch batch;
+    for unsigned long i = 0l; i < jobs.getSize(); i++ {
+        const SyncJob& job = jobs.get(i);
+        const String base = repoApiUrl(job.owner, job.repo);
+        batch.http("GET", base, String("application/vnd.github+json"), ctx.config.githubApiToken);
+        batch.http("GET", base + "/readme", String("application/vnd.github.html+json"), ctx.config.githubApiToken);
+        batch.http("GET", base + "/releases?per_page=30", String("application/vnd.github.html+json"), ctx.config.githubApiToken);
+    }
+    return batch.finish();
+}
+
+/**
+ * Releases of job `jobIdx`, taken from the fetch batch at handler batch index `fetchBatch`
+ */
+public f<Vector<Release>> syncReleasesOf(const Ctx& ctx, int fetchBatch, unsigned long jobIdx, const SyncJob& job) {
+    JV response = ctx.res(fetchBatch, jobIdx * 3l + 2l);
+    if response.getNum("status") != 200l {
+        Vector<Release> none;
+        return none;
+    }
+    JV body = parseJson(response.getStr("body"));
+    return parseReleases(body, job.owner, job.repo);
+}
+
+/**
+ * Batch 2: the manifests of the newest releases of every job
+ */
+public f<String> syncManifestBatch(const Ctx& ctx, const Vector<SyncJob>& jobs, int fetchBatch) {
+    Batch batch;
+    for unsigned long i = 0l; i < jobs.getSize(); i++ {
+        const SyncJob& job = jobs.get(i);
+        const Vector<Release> releases = syncReleasesOf(ctx, fetchBatch, i, job);
+        for unsigned long k = 0l; k < releases.getSize() && k < MAX_MANIFESTS; k++ {
+            const String url = String("https://raw.githubusercontent.com/") + urlEncode(job.owner) + "/" + urlEncode(job.repo) + "/" +
+                               urlEncode(releases.get(k).tag) + "/" + MANIFEST_FILE;
+            batch.http("GET", url, String(""), String(""));
+        }
+    }
+    // An empty batch is still a valid batch, the host answers it with an empty result list
+    return batch.finish();
+}
+
+/**
+ * Batch 3: the transaction that stores everything
+ */
+public f<String> syncWriteBatch(const Ctx& ctx, const Vector<SyncJob>& jobs, int fetchBatch, int manifestBatch) {
+    Batch batch;
+    batch.tx = true;
+    unsigned long manifestIdx = 0l;
+    for unsigned long i = 0l; i < jobs.getSize(); i++ {
+        const SyncJob& job = jobs.get(i);
+        JV repoInfo = ctx.res(fetchBatch, i * 3l);
+        JV readme = ctx.res(fetchBatch, i * 3l + 1l);
+        const Vector<Release> releases = syncReleasesOf(ctx, fetchBatch, i, job);
+        JV releasesResponse = ctx.res(fetchBatch, i * 3l + 2l);
+        const bool releasesOk = releasesResponse.getNum("status") == 200l;
+        const unsigned long manifestCount = releases.getSize() < MAX_MANIFESTS ? releases.getSize() : MAX_MANIFESTS;
+
+        // Package metadata
+        {
+            Sql sql = Sql("UPDATE packages SET synced_at = ?");
+            sql.s(ctx.now);
+            if repoInfo.getNum("status") == 200l {
+                JV info = parseJson(repoInfo.getStr("body"));
+                sql.sql(", stars = ?");
+                sql.n(info.getNum("stargazers_count"));
+                JV license = info.get("license");
+                sql.sql(", license = ?");
+                String spdx = license.getStr("spdx_id");
+                if spdx == "NOASSERTION" { spdx = String(""); }
+                sql.s(head(spdx, 64l));
+                const String description = info.getStr("description");
+                if !description.isEmpty() {
+                    sql.sql(", description = IF(description = '', ?, description)");
+                    sql.s(head(description, 500l));
+                }
+                const String homepage = info.getStr("homepage");
+                if isHttpUrl(homepage) && homepage.getLength() <= 255l {
+                    sql.sql(", homepage = IF(homepage = '', ?, homepage)");
+                    sql.s(homepage);
+                }
+            }
+            const String readmeBody = readme.getStr("body");
+            if readme.getNum("status") == 200l && readmeBody.getLength() <= MAX_README_BYTES {
+                sql.sql(", readme_html = ?");
+                sql.s(rewriteRelativeLinks(readmeBody, job.owner, job.repo));
+            } else if readme.getNum("status") == 404l {
+                sql.sql(", readme_html = NULL");
+            }
+            sql.sql(" WHERE id = ");
+            sql.pn(job.packageId);
+            batch.query(sql);
+        }
+
+        if releasesOk {
+            // Mirror what GitHub has: drop versions that no longer exist
+            {
+                Sql sql = Sql("DELETE FROM package_versions WHERE package_id = ");
+                sql.pn(job.packageId);
+                if releases.getSize() > 0l {
+                    sql.sql(" AND version NOT IN (");
+                    for unsigned long k = 0l; k < releases.getSize(); k++ {
+                        if k > 0l { sql.sql(", "); }
+                        sql.ps(releases.get(k).version);
+                    }
+                    sql.sql(")");
+                }
+                batch.query(sql);
+            }
+            for unsigned long k = 0l; k < releases.getSize(); k++ {
+                const Release& rel = releases.get(k);
+                Sql sql = Sql("INSERT INTO package_versions (package_id, version, tag_name, title, changelog, changelog_html, prerelease, tarball_url, published_at) VALUES (");
+                sql.pn(job.packageId);
+                sql.sql(", ");
+                sql.ps(rel.version);
+                sql.sql(", ");
+                sql.ps(head(rel.tag, 128l));
+                sql.sql(", ");
+                sql.ps(head(rel.title, 255l));
+                sql.sql(", ");
+                sql.ps(rel.body);
+                sql.sql(", ");
+                sql.ps(rel.bodyHtml);
+                sql.sql(", ");
+                sql.pn(rel.prerelease ? 1l : 0l);
+                sql.sql(", ");
+                sql.ps(rel.tarballUrl);
+                sql.sql(", ");
+                sql.ps(rel.publishedAt);
+                sql.sql(") ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), tag_name = VALUES(tag_name), title = VALUES(title), " +
+                        "changelog = VALUES(changelog), changelog_html = VALUES(changelog_html), prerelease = VALUES(prerelease), " +
+                        "tarball_url = VALUES(tarball_url), published_at = VALUES(published_at)");
+                batch.query(sql);
+
+                if k < manifestCount {
+                    JV manifestResponse = ctx.res(manifestBatch, manifestIdx);
+                    manifestIdx++;
+                    const long status = manifestResponse.getNum("status");
+                    if status == 200l || status == 404l {
+                        batch.simple("SET @vid = LAST_INSERT_ID()");
+                        batch.simple("DELETE FROM package_dependencies WHERE version_id = @vid");
+                        if status == 200l {
+                            JV manifest = parseJson(manifestResponse.getStr("body"));
+                            const Vector<Dependency> deps = parseManifestDependencies(manifest);
+                            for unsigned long d = 0l; d < deps.getSize(); d++ {
+                                Sql dep = Sql("INSERT INTO package_dependencies (version_id, dep_name, constraint_text, dev) VALUES (@vid, ");
+                                dep.ps(deps.get(d).name);
+                                dep.sql(", ");
+                                dep.ps(deps.get(d).constraint);
+                                dep.sql(", ");
+                                dep.pn(deps.get(d).dev ? 1l : 0l);
+                                dep.sql(")");
+                                batch.query(dep);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Point the package at its newest version
+            const long latest = pickLatestRelease(releases);
+            Sql sql = Sql("UPDATE packages SET latest_version_id = ");
+            if latest >= 0l {
+                const Release& best = releases.get(cast<unsigned long>(latest));
+                sql.sql("(SELECT id FROM package_versions WHERE package_id = ");
+                sql.pn(job.packageId);
+                sql.sql(" AND version = ");
+                sql.ps(best.version);
+                sql.sql("), updated_at = ");
+                sql.ps(best.publishedAt);
+            } else {
+                sql.sql("NULL");
+            }
+            sql.sql(" WHERE id = ");
+            sql.pn(job.packageId);
+            batch.query(sql);
+        } else {
+            manifestIdx += manifestCount;
+        }
+    }
+    return batch.finish();
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------------------------------------------------
+
+#[test]
+f<bool> testToDbTime() {
+    assert toDbTime(String("2026-10-12T19:43:11Z"), String("x")) == "2026-10-12 19:43:11";
+    assert toDbTime(String(""), String("fallback")) == "fallback";
+    return true;
+}
+
+#[test]
+f<bool> testRewriteRelativeLinks() {
+    const String html = String("<a href=\"docs/a.md\">a</a><img src=\"/img/x.png\"><a href=\"https://x.org\">x</a><a href=\"#top\">t</a>");
+    const String rewritten = rewriteRelativeLinks(html, String("o"), String("r"));
+    assert rewritten == "<a href=\"https://github.com/o/r/blob/HEAD/docs/a.md\">a</a><img src=\"https://raw.githubusercontent.com/o/r/HEAD/img/x.png\">" +
+                        String("<a href=\"https://x.org\">x</a><a href=\"#top\">t</a>");
+    return true;
+}
+
+#[test]
+f<bool> testParseReleases() {
+    JV releases = parseJson(String("[{\"tag_name\":\"v1.2.0\",\"name\":\"Big\",\"body\":\"- a\",\"body_html\":\"<ul></ul>\",\"draft\":false,\"prerelease\":false,\"published_at\":\"2026-09-01T10:00:00Z\"}," +
+                                   "{\"tag_name\":\"nightly\",\"draft\":false},{\"tag_name\":\"v1.3.0-rc.1\",\"prerelease\":true,\"published_at\":\"2026-10-01T10:00:00Z\"}," +
+                                   "{\"tag_name\":\"v1.0.0\",\"draft\":true}]"));
+    const Vector<Release> list = parseReleases(releases, String("o"), String("r"));
+    assert list.getSize() == 2l;
+    assert list.get(0l).version == "1.2.0";
+    assert list.get(0l).bodyHtml == "<ul></ul>";
+    assert list.get(0l).publishedAt == "2026-09-01 10:00:00";
+    assert list.get(0l).tarballUrl == "https://github.com/o/r/archive/refs/tags/v1.2.0.tar.gz";
+    assert list.get(1l).prerelease;
+    assert pickLatestRelease(list) == 0l;
+    return true;
+}
+
+#[test]
+f<bool> testParseManifest() {
+    JV manifest = parseJson(String("{\"name\":\"x\",\"dependencies\":{\"Json-Parser\":\"^1.2.0\",\"bad name\":\"1\"},\"devDependencies\":{\"test-kit\":\"*\"}}"));
+    const Vector<Dependency> deps = parseManifestDependencies(manifest);
+    assert deps.getSize() == 2l;
+    assert deps.get(0l).name == "json-parser";
+    assert deps.get(0l).constraint == "^1.2.0";
+    assert !deps.get(0l).dev;
+    assert deps.get(1l).dev;
+    return true;
+}

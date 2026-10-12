@@ -1,0 +1,309 @@
+import "std/data/vector";
+import "./util";
+import "./json";
+import "./core";
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Page shell and small reusable UI pieces. The whole UI is rendered on the server without any client-side script.
+// ---------------------------------------------------------------------------------------------------------------------
+
+public const string SITE_NAME = "Spice Rack";
+
+public const string GITHUB_MARK = "M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12";
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Icons
+// ---------------------------------------------------------------------------------------------------------------------
+
+public f<String> iconGithub() {
+    return String("<svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path fill=\"currentColor\" d=\"") + GITHUB_MARK + "\"/></svg>";
+}
+
+public f<String> iconDownload() {
+    return String("<svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 3v12m0 0l-4.5-4.5M12 15l4.5-4.5M4 19h16\"/></svg>");
+}
+
+public f<String> iconStar() {
+    return String("<svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1 5.9L12 16.9l-5.2 2.8 1-5.9-4.3-4.1 5.9-.8z\"/></svg>");
+}
+
+public f<String> iconClock() {
+    return String("<svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"8.5\"/><path d=\"M12 7.5V12l3 2\"/></svg>");
+}
+
+public f<String> iconUser() {
+    return String("<svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"8\" r=\"3.5\"/><path d=\"M5 20c.8-3.6 3.6-5.5 7-5.5s6.2 1.9 7 5.5\"/></svg>");
+}
+
+public f<String> iconSearch() {
+    return String("<svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><circle cx=\"10.5\" cy=\"10.5\" r=\"6\"/><path d=\"M15 15l5 5\"/></svg>");
+}
+
+public f<String> brandMark() {
+    return String("<img class=\"brand-mark\" src=\"/static/logo.png\" alt=\"\" width=\"28\" height=\"28\">");
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Shell
+// ---------------------------------------------------------------------------------------------------------------------
+
+public f<String> avatarUrl(const String& login) {
+    return String("https://github.com/") + urlEncode(login) + ".png?size=64";
+}
+
+f<String> navLink(const Ctx& ctx, string href, string label, string activePrefix) {
+    String cls = String("nav-link");
+    if ctx.path.startsWith(activePrefix) { cls += " active"; }
+    return String("<a class=\"") + cls + "\" href=\"" + href + "\">" + label + "</a>";
+}
+
+public f<String> renderHeader(const Ctx& ctx) {
+    String h = String("<header class=\"site-header\"><div class=\"container header-inner\">");
+    h += "<a class=\"brand\" href=\"/\">" + brandMark() + "<span>" + SITE_NAME + "</span></a>";
+    h += "<form class=\"header-search\" action=\"/packages\" method=\"get\" role=\"search\">";
+    h += "<label class=\"sr-only\" for=\"header-q\">Search packages</label>";
+    h += iconSearch() + "<input id=\"header-q\" type=\"search\" name=\"q\" placeholder=\"Search packages\" autocomplete=\"off\"></form>";
+    h += "<nav class=\"main-nav\" aria-label=\"Main\">";
+    h += navLink(ctx, "/packages", "Packages", "/packages");
+    h += navLink(ctx, "/docs/publishing", "Publish", "/docs");
+    if ctx.user.present {
+        h += navLink(ctx, "/dashboard", "Dashboard", "/dashboard");
+        if ctx.isAdmin() { h += navLink(ctx, "/admin", "Admin", "/admin"); }
+        h += "<form class=\"inline-form user-menu\" action=\"/logout\" method=\"post\">";
+        h += "<input type=\"hidden\" name=\"csrf\" value=\"" + esc(ctx.user.csrf) + "\">";
+        h += "<img class=\"avatar\" src=\"" + esc(avatarUrl(ctx.user.login)) + "\" alt=\"\" width=\"28\" height=\"28\">";
+        h += "<span class=\"user-login\">" + esc(ctx.user.login) + "</span>";
+        h += "<button class=\"btn btn-ghost btn-small\" type=\"submit\">Sign out</button></form>";
+    } else {
+        h += "<a class=\"btn btn-primary btn-small\" href=\"/auth/github\">" + iconGithub() + "Sign in</a>";
+    }
+    h += "</nav></div></header>";
+    return h;
+}
+
+public f<String> renderFooter() {
+    String h = String("<footer class=\"site-footer\"><div class=\"container footer-inner\">");
+    h += "<span>" + brandMark() + " " + SITE_NAME + " &middot; the package registry for the ";
+    h += "<a href=\"https://spicelang.com\" rel=\"noopener\">Spice</a> programming language</span>";
+    h += "<span class=\"footer-links\"><a href=\"/docs/publishing\">Publishing guide</a>";
+    h += "<a href=\"/api/v1/packages\">API</a>";
+    h += "<a href=\"https://github.com/spicelang/spice\" rel=\"noopener\">GitHub</a></span>";
+    h += "</div></footer>";
+    return h;
+}
+
+/**
+ * Translate the notice codes of the query string to messages. Free text from the URL is never reflected.
+ */
+public f<String> renderNotice(const Ctx& ctx) {
+    const String notice = ctx.query.get("notice");
+    const String error = ctx.query.get("error");
+    String message;
+    String kind = String("notice-ok");
+    if notice == "created" { message = String("Package created. The first sync with GitHub is complete."); }
+    else if notice == "saved" { message = String("Changes saved."); }
+    else if notice == "synced" { message = String("Synced with GitHub."); }
+    else if notice == "deleted" { message = String("Package deleted."); }
+    else if notice == "signedout" { message = String("You have been signed out."); }
+    else if notice == "userdeleted" { message = String("User deleted."); }
+    else if error == "denied" { message = String("GitHub sign-in was cancelled or denied."); kind = String("notice-err"); }
+    else if error == "state" { message = String("The sign-in request expired. Please try again."); kind = String("notice-err"); }
+    else if error == "suspended" { message = String("This account is suspended."); kind = String("notice-err"); }
+    else if error == "github" { message = String("GitHub could not be reached. Please try again in a moment."); kind = String("notice-err"); }
+    if message.isEmpty() { return String(""); }
+    return String("<div class=\"container\"><p class=\"notice ") + kind + "\" role=\"status\">" + message + "</p></div>";
+}
+
+/**
+ * Wrap content in the complete HTML document
+ */
+public f<String> layoutPage(const Ctx& ctx, const String& title, const String& description, const String& content) {
+    String h = String("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">");
+    h += "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
+    h += "<meta name=\"color-scheme\" content=\"light dark\">";
+    h += "<title>" + esc(title) + " · " + SITE_NAME + "</title>";
+    h += "<meta name=\"description\" content=\"" + esc(description) + "\">";
+    h += "<link rel=\"icon\" href=\"/static/favicon.ico\" sizes=\"96x96\">";
+    h += "<link rel=\"icon\" href=\"/static/favicon-32x32.png\" type=\"image/png\" sizes=\"32x32\">";
+    h += "<link rel=\"icon\" href=\"/static/favicon-16x16.png\" type=\"image/png\" sizes=\"16x16\">";
+    h += "<link rel=\"stylesheet\" href=\"/static/style.css\">";
+    h += "<link rel=\"search\" type=\"application/opensearchdescription+xml\" title=\"Spice Rack\" href=\"/opensearch.xml\">";
+    h += "</head><body>";
+    h += "<a class=\"skip-link\" href=\"#main\">Skip to content</a>";
+    h += renderHeader(ctx);
+    h += renderNotice(ctx);
+    h += "<main id=\"main\">" + content + "</main>";
+    h += renderFooter();
+    h += "</body></html>";
+    return h;
+}
+
+public f<String> errorPageHtml(const Ctx& ctx, int status, const String& heading, const String& text) {
+    String body = String("<div class=\"container narrow center-text section\"><p class=\"error-code\">") + fmtLong(cast<long>(status)) + "</p>";
+    body += "<h1>" + esc(heading) + "</h1><p class=\"muted\">" + esc(text) + "</p>";
+    body += "<p><a class=\"btn btn-primary\" href=\"/\">Back to the rack</a></p></div>";
+    return layoutPage(ctx, heading, text, body);
+}
+
+public f<String> notFound(Ctx& ctx) {
+    return ctx.html(404, errorPageHtml(ctx, 404, String("Page not found"), String("The page you are looking for does not exist, or has been moved.")));
+}
+
+public f<String> forbidden(Ctx& ctx) {
+    return ctx.html(403, errorPageHtml(ctx, 403, String("Not allowed"), String("You do not have permission to do that.")));
+}
+
+public f<String> badRequest(Ctx& ctx, const String& text) {
+    return ctx.html(400, errorPageHtml(ctx, 400, String("Bad request"), text));
+}
+
+public f<String> serverError(Ctx& ctx) {
+    return ctx.html(500, errorPageHtml(ctx, 500, String("Something went wrong"), String("The server hit an unexpected problem. Please try again in a moment.")));
+}
+
+/**
+ * Anonymous visitors are sent to the GitHub sign-in
+ */
+public f<String> requireLogin(Ctx& ctx) {
+    // Remember where to continue after the login, if the path is plain enough to be stored in a cookie
+    bool plain = ctx.path.getLength() < 150l;
+    for unsigned long i = 0l; i < ctx.path.getLength() && plain; i++ {
+        const char c = ctx.path[i];
+        plain = isLowerAlnum(c) || (c >= 'A' && c <= 'Z') || c == '/' || c == '-' || c == '_' || c == '.';
+    }
+    if plain { ctx.setCookie("rack_return", ctx.path, 600l); }
+    return ctx.redirect(String("/auth/github"));
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Components
+// ---------------------------------------------------------------------------------------------------------------------
+
+public f<String> tagChip(const String& tag, bool linked = true) {
+    if !linked { return String("<span class=\"tag\">") + esc(tag) + "</span>"; }
+    return String("<a class=\"tag\" href=\"/packages?tag=") + urlEncode(tag) + "\">" + esc(tag) + "</a>";
+}
+
+public f<String> tagList(const String& commaSeparated) {
+    if commaSeparated.isEmpty() { return String(""); }
+    String h = String("<ul class=\"tags\">");
+    const Vector<String> tags = split(commaSeparated, ',');
+    for unsigned long i = 0l; i < tags.getSize(); i++ {
+        h += "<li>" + tagChip(tags.get(i)) + "</li>";
+    }
+    h += "</ul>";
+    return h;
+}
+
+public f<String> stat(const String& icon, const String& value, const String& label) {
+    return String("<span class=\"stat\" title=\"") + esc(label) + "\">" + icon + "<span>" + esc(value) + "</span></span>";
+}
+
+/**
+ * A package card for lists. Expects the columns of the search query.
+ */
+public f<String> packageCard(JV row) {
+    const String name = row.getStr("name");
+    String h = String("<li class=\"card package-card\"><div class=\"card-head\">");
+    h += "<h3><a href=\"/packages/" + urlEncode(name) + "\">" + esc(name) + "</a>";
+    const String version = row.getStr("latest_version");
+    if !version.isEmpty() { h += " <span class=\"version\">v" + esc(version) + "</span>"; }
+    h += "</h3></div>";
+    h += "<p class=\"card-desc\">" + esc(row.getStr("description")) + "</p>";
+    h += tagList(row.getStr("tags"));
+    h += "<div class=\"card-meta\">";
+    h += stat(iconDownload(), fmtCount(row.getNum("downloads_total")), String("Total downloads"));
+    h += stat(iconStar(), fmtCount(row.getNum("stars")), String("GitHub stars"));
+    h += "<span class=\"stat\" title=\"Maintainer\">" + iconUser() + "<a href=\"/packages?owner=" + urlEncode(row.getStr("owner_login")) + "\">" + esc(row.getStr("owner_login")) + "</a></span>";
+    h += stat(iconClock(), fmtDate(row.getStr("updated_at")), String("Last updated"));
+    h += "</div></li>";
+    return h;
+}
+
+/**
+ * Pagination links; `baseQuery` is the already encoded query string without the page parameter
+ */
+public f<String> pagination(const String& basePath, const String& baseQuery, long page, long pageCount) {
+    if pageCount <= 1l { return String(""); }
+    const String prefix = basePath + "?" + baseQuery + (baseQuery.isEmpty() ? "" : "&") + "page=";
+    String h = String("<nav class=\"pagination\" aria-label=\"Pagination\">");
+    if page > 1l { h += "<a class=\"btn btn-ghost\" rel=\"prev\" href=\"" + prefix + fmtLong(page - 1l) + "\">&larr; Previous</a>"; }
+    h += "<span class=\"muted\">Page " + fmtLong(page) + " of " + fmtLong(pageCount) + "</span>";
+    if page < pageCount { h += "<a class=\"btn btn-ghost\" rel=\"next\" href=\"" + prefix + fmtLong(page + 1l) + "\">Next &rarr;</a>"; }
+    h += "</nav>";
+    return h;
+}
+
+public f<String> csrfField(const Ctx& ctx) {
+    return String("<input type=\"hidden\" name=\"csrf\" value=\"") + esc(ctx.user.csrf) + "\">";
+}
+
+/**
+ * Bar chart as inline SVG. `labels` and `values` have the same length.
+ */
+public f<String> barChart(const String& title, const Vector<String>& labels, const Vector<long>& values, const String& unit) {
+    const long width = 720l;
+    const long height = 200l;
+    const long left = 44l;
+    const long right = 8l;
+    const long top = 12l;
+    const long bottom = 26l;
+    const unsigned long count = values.getSize();
+    long maxValue = 1l;
+    long total = 0l;
+    for unsigned long i = 0l; i < count; i++ {
+        if values.get(i) > maxValue { maxValue = values.get(i); }
+        total += values.get(i);
+    }
+    // Pick a "nice" step (1, 2, 5, 10, 20, 50, ...) so that four steps cover the maximum
+    long step = 1l;
+    while step * 4l < maxValue {
+        long leading = step;
+        while leading >= 10l { leading /= 10l; }
+        if leading == 2l { step = step * 5l / 2l; } else { step = step * 2l; }
+    }
+    const long axisMax = step * 4l;
+
+    const long plotW = width - left - right;
+    const long plotH = height - top - bottom;
+    String h = String("<figure class=\"chart\"><figcaption>") + esc(title) + "<span class=\"muted\"> &mdash; " + fmtThousands(total) + " in total</span></figcaption>";
+    h += "<svg viewBox=\"0 0 " + fmtLong(width) + " " + fmtLong(height) + "\" role=\"img\" aria-label=\"" + esc(title) + "\" preserveAspectRatio=\"xMidYMid meet\">";
+    // Grid and y axis labels
+    for long g = 0l; g <= 4l; g++ {
+        const long y = top + plotH - (plotH * g / 4l);
+        h += "<line class=\"grid\" x1=\"" + fmtLong(left) + "\" x2=\"" + fmtLong(width - right) + "\" y1=\"" + fmtLong(y) + "\" y2=\"" + fmtLong(y) + "\"/>";
+        h += "<text class=\"axis\" x=\"" + fmtLong(left - 6l) + "\" y=\"" + fmtLong(y + 4l) + "\" text-anchor=\"end\">" + fmtCount(step * g) + "</text>";
+    }
+    if count > 0l {
+        const long slot = plotW * 100l / cast<long>(count);
+        for unsigned long i = 0l; i < count; i++ {
+            const long value = values.get(i);
+            const long barH = value * plotH / axisMax;
+            const long x = left + (cast<long>(i) * slot) / 100l;
+            const long barW = (slot * 72l) / 10000l > 1l ? (slot * 72l) / 10000l : 1l;
+            const long y = top + plotH - barH;
+            h += "<rect class=\"bar\" x=\"" + fmtLong(x + (slot / 100l - barW) / 2l) + "\" y=\"" + fmtLong(y) + "\" width=\"" + fmtLong(barW) + "\" height=\"" + fmtLong(barH > 0l ? barH : 0l) + "\" rx=\"2\">";
+            h += "<title>" + esc(labels.get(i)) + ": " + fmtThousands(value) + " " + esc(unit) + "</title></rect>";
+            if i % 5l == 0l || i + 1l == count {
+                const long lx = x + slot / 200l;
+                h += "<text class=\"axis\" x=\"" + fmtLong(lx) + "\" y=\"" + fmtLong(height - 8l) + "\" text-anchor=\"middle\">" + esc(fmtDayShort(labels.get(i))) + "</text>";
+            }
+        }
+    }
+    h += "</svg></figure>";
+    return h;
+}
+
+#[test]
+f<bool> testBarChartRenders() {
+    Vector<String> labels;
+    Vector<long> values;
+    for long i = 0l; i < 30l; i++ {
+        labels.pushBack(String("2026-09-") + (i < 9l ? "0" : "") + fmtLong(i + 1l));
+        values.pushBack(i * 3l);
+    }
+    const String svg = barChart(String("Downloads"), labels, values, String("downloads"));
+    assert svg.contains("<svg");
+    assert svg.contains("2026-09-30: 87 downloads");
+    return true;
+}

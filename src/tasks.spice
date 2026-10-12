@@ -1,0 +1,44 @@
+import "std/data/vector";
+import "./util";
+import "./json";
+import "./core";
+import "./github";
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Background work. The host triggers these on a timer through synthetic requests, so that the logic stays in here.
+// ---------------------------------------------------------------------------------------------------------------------
+
+const long SYNC_BATCH_SIZE = 5l;
+const long SYNC_AFTER_HOURS = 6l;
+
+/**
+ * Refresh the packages that have not been synced for a while (README, releases, dependencies, stars)
+ */
+public f<String> handleSyncTask(Ctx& ctx) {
+    const int step = ctx.step();
+    if step == 0 {
+        Batch batch;
+        Sql sql = Sql("SELECT id, repo_owner, repo_name FROM packages WHERE synced_at IS NULL OR synced_at < DATE_SUB(");
+        sql.ps(ctx.now);
+        sql.sql(", INTERVAL ");
+        sql.pn(SYNC_AFTER_HOURS);
+        sql.sql(" HOUR) ORDER BY synced_at IS NOT NULL, synced_at ASC LIMIT ");
+        sql.pn(SYNC_BATCH_SIZE);
+        batch.query(sql);
+        return batch.finish();
+    }
+    JV rows = ctx.rows(0, 0l);
+    Vector<SyncJob> jobs;
+    for JV row = rows.first(); row.exists(); row = row.after() {
+        SyncJob job;
+        job.packageId = row.getNum("id");
+        job.owner = row.getStr("repo_owner");
+        job.repo = row.getStr("repo_name");
+        jobs.pushBack(job);
+    }
+    if jobs.getSize() == 0l { return ctx.text(200, String("nothing to sync\n")); }
+    if step == 1 { return syncFetchBatch(ctx, jobs); }
+    if step == 2 { return syncManifestBatch(ctx, jobs, 1); }
+    if step == 3 { return syncWriteBatch(ctx, jobs, 1, 2); }
+    return ctx.text(200, String("synced ") + fmtLong(cast<long>(jobs.getSize())) + " packages\n");
+}

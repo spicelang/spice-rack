@@ -1,0 +1,572 @@
+import "std/data/vector";
+import "./util";
+
+// ---------------------------------------------------------------------------------------------------------------------
+// A small JSON reader and writer.
+//
+// The reader parses into a flat node list (indices instead of pointers), so it plays well with the bump allocator in
+// the wasm build. Values are accessed through the cheap `JV` handle. Accessing something that does not exist yields a
+// handle that reads as null / "" / 0, which keeps the calling code free of error handling noise.
+// ---------------------------------------------------------------------------------------------------------------------
+
+public const int J_NULL = 0;
+public const int J_BOOL = 1;
+public const int J_NUMBER = 2;
+public const int J_STRING = 3;
+public const int J_ARRAY = 4;
+public const int J_OBJECT = 5;
+
+public type JNode struct {
+    public int kind = 0
+    public unsigned long start = 0l  // Offset of the value in the source; for strings the first char after the opening quote
+    public unsigned long end = 0l    // One past the end; for strings the offset of the closing quote
+    public bool escaped = false      // String contains backslash escapes
+    public int firstChild = -1
+    public int lastChild = -1
+    public int next = -1
+    public unsigned long keyStart = 0l
+    public unsigned long keyEnd = 0l
+    public bool keyEscaped = false
+    public bool hasKey = false
+    public int count = 0             // Number of children
+}
+
+public type Json struct {
+    public String src
+    public Vector<JNode> nodes
+    public int root = -1
+    public bool valid = false
+    public unsigned long pos = 0l
+    public int depth = 0
+}
+
+/**
+ * Handle to a value in a parsed document
+ */
+public type JV struct {
+    public Json* doc = nil<Json*>
+    public int idx = -1
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Parsing
+// ---------------------------------------------------------------------------------------------------------------------
+
+p Json.skipWs() {
+    const unsigned long len = this.src.getLength();
+    while this.pos < len && isSpaceChar(this.src[this.pos]) { this.pos++; }
+}
+
+f<bool> Json.matchWord(string word) {
+    const unsigned long wl = getRawLength(word);
+    if this.pos + wl > this.src.getLength() { return false; }
+    for unsigned long i = 0l; i < wl; i++ {
+        if this.src[this.pos + i] != word[i] { return false; }
+    }
+    this.pos += wl;
+    return true;
+}
+
+/**
+ * Scan a string literal starting at the opening quote. Returns false on malformed input.
+ */
+f<bool> Json.scanString(unsigned long& start, unsigned long& end, bool& escaped) {
+    const unsigned long len = this.src.getLength();
+    if this.pos >= len || this.src[this.pos] != '"' { return false; }
+    this.pos++;
+    start = this.pos;
+    escaped = false;
+    while this.pos < len {
+        const char c = this.src[this.pos];
+        if c == '"' {
+            end = this.pos;
+            this.pos++;
+            return true;
+        }
+        if c == '\\' { escaped = true; this.pos++; }
+        this.pos++;
+    }
+    return false;
+}
+
+/**
+ * Parses one value and returns its node index or -1 on error
+ */
+f<int> Json.parseValue() {
+    this.skipWs();
+    const unsigned long len = this.src.getLength();
+    if this.pos >= len || this.depth > 64 { return -1; }
+    const char c = this.src[this.pos];
+    JNode node;
+    node.start = this.pos;
+    if c == '"' {
+        node.kind = J_STRING;
+        if !this.scanString(node.start, node.end, node.escaped) { return -1; }
+        this.nodes.pushBack(node);
+        return cast<int>(this.nodes.getSize()) - 1;
+    }
+    if c == '{' || c == '[' {
+        const bool isObject = c == '{';
+        node.kind = isObject ? J_OBJECT : J_ARRAY;
+        this.pos++;
+        this.depth++;
+        this.nodes.pushBack(node);
+        const int self = cast<int>(this.nodes.getSize()) - 1;
+        const char closer = isObject ? '}' : ']';
+        this.skipWs();
+        if this.pos < len && this.src[this.pos] == closer {
+            this.pos++;
+            this.depth--;
+            this.nodes.get(cast<unsigned long>(self)).end = this.pos;
+            return self;
+        }
+        while true {
+            this.skipWs();
+            unsigned long keyStart = 0l;
+            unsigned long keyEnd = 0l;
+            bool keyEscaped = false;
+            if isObject {
+                if !this.scanString(keyStart, keyEnd, keyEscaped) { return -1; }
+                this.skipWs();
+                if this.pos >= len || this.src[this.pos] != ':' { return -1; }
+                this.pos++;
+            }
+            const int child = this.parseValue();
+            if child < 0 { return -1; }
+            JNode& childNode = this.nodes.get(cast<unsigned long>(child));
+            if isObject {
+                childNode.hasKey = true;
+                childNode.keyStart = keyStart;
+                childNode.keyEnd = keyEnd;
+                childNode.keyEscaped = keyEscaped;
+            }
+            JNode& selfNode = this.nodes.get(cast<unsigned long>(self));
+            if selfNode.firstChild < 0 {
+                selfNode.firstChild = child;
+            } else {
+                this.nodes.get(cast<unsigned long>(selfNode.lastChild)).next = child;
+            }
+            selfNode.lastChild = child;
+            selfNode.count++;
+            this.skipWs();
+            if this.pos >= len { return -1; }
+            const char sep = this.src[this.pos];
+            this.pos++;
+            if sep == closer { break; }
+            if sep != ',' { return -1; }
+        }
+        this.depth--;
+        this.nodes.get(cast<unsigned long>(self)).end = this.pos;
+        return self;
+    }
+    if c == 't' {
+        if !this.matchWord("true") { return -1; }
+        node.kind = J_BOOL;
+    } else if c == 'f' {
+        if !this.matchWord("false") { return -1; }
+        node.kind = J_BOOL;
+    } else if c == 'n' {
+        if !this.matchWord("null") { return -1; }
+        node.kind = J_NULL;
+    } else if c == '-' || (c >= '0' && c <= '9') {
+        node.kind = J_NUMBER;
+        this.pos++;
+        while this.pos < len {
+            const char d = this.src[this.pos];
+            const bool numeric = (d >= '0' && d <= '9') || d == '.' || d == 'e' || d == 'E' || d == '+' || d == '-';
+            if !numeric { break; }
+            this.pos++;
+        }
+    } else {
+        return -1;
+    }
+    node.end = this.pos;
+    this.nodes.pushBack(node);
+    return cast<int>(this.nodes.getSize()) - 1;
+}
+
+/**
+ * Parse a JSON text. The returned handle is the root; check isValid() for errors. The document lives as long as
+ * the arena of the current request, so it is intentionally never freed.
+ */
+public f<JV> parseJson(const String& text) {
+    Json* doc = __new<Json>();
+    doc.src = text;
+    doc.root = doc.parseValue();
+    if doc.root >= 0 {
+        doc.skipWs();
+        doc.valid = doc.pos == doc.src.getLength();
+    }
+    JV handle;
+    handle.doc = doc;
+    handle.idx = doc.valid ? doc.root : -1;
+    return handle;
+}
+
+public f<JV> missingJson() {
+    JV handle;
+    return handle;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Reading
+// ---------------------------------------------------------------------------------------------------------------------
+
+f<String> unescapeJson(const String& src, unsigned long start, unsigned long end, bool escaped) {
+    if !escaped { return src.getSubstring(start, cast<long>(end - start)); }
+    String out;
+    unsigned long i = start;
+    while i < end {
+        const char c = src[i];
+        if c != '\\' { out.append(c); i++; continue; }
+        i++;
+        if i >= end { break; }
+        const char e = src[i];
+        i++;
+        if e == 'n' { out.append('\n'); }
+        else if e == 't' { out.append('\t'); }
+        else if e == 'r' { out.append('\r'); }
+        else if e == 'b' { out.append(cast<char>(8)); }
+        else if e == 'f' { out.append(cast<char>(12)); }
+        else if e == 'u' && i + 4l <= end {
+            int code = 0;
+            for unsigned long k = 0l; k < 4l; k++ {
+                const int hv = hexValue(src[i + k]);
+                code = code * 16 + (hv < 0 ? 0 : hv);
+            }
+            i += 4l;
+            // Surrogate pair
+            if code >= 55296 && code < 56320 && i + 6l <= end && src[i] == '\\' && src[i + 1l] == 'u' {
+                int low = 0;
+                for unsigned long k = 0l; k < 4l; k++ {
+                    const int hv = hexValue(src[i + 2l + k]);
+                    low = low * 16 + (hv < 0 ? 0 : hv);
+                }
+                code = 65536 + ((code - 55296) * 1024) + (low - 56320);
+                i += 6l;
+            }
+            appendUtf8(out, code);
+        }
+        else { out.append(e); }
+    }
+    return out;
+}
+
+public p appendUtf8(String& out, int code) {
+    if code < 128 {
+        out.append(cast<char>(code));
+    } else if code < 2048 {
+        out.append(cast<char>(192 + code / 64));
+        out.append(cast<char>(128 + code % 64));
+    } else if code < 65536 {
+        out.append(cast<char>(224 + code / 4096));
+        out.append(cast<char>(128 + (code / 64) % 64));
+        out.append(cast<char>(128 + code % 64));
+    } else {
+        out.append(cast<char>(240 + code / 262144));
+        out.append(cast<char>(128 + (code / 4096) % 64));
+        out.append(cast<char>(128 + (code / 64) % 64));
+        out.append(cast<char>(128 + code % 64));
+    }
+}
+
+f<JNode&> JV.node() {
+    return this.doc.nodes.get(cast<unsigned long>(this.idx));
+}
+
+public f<bool> JV.exists() { return this.idx >= 0; }
+
+public f<int> JV.kind() {
+    if this.idx < 0 { return J_NULL; }
+    return this.node().kind;
+}
+
+public f<bool> JV.isNull() { return this.idx < 0 || this.node().kind == J_NULL; }
+public f<bool> JV.isArray() { return this.idx >= 0 && this.node().kind == J_ARRAY; }
+public f<bool> JV.isObject() { return this.idx >= 0 && this.node().kind == J_OBJECT; }
+public f<bool> JV.isString() { return this.idx >= 0 && this.node().kind == J_STRING; }
+
+public f<unsigned long> JV.size() {
+    if this.idx < 0 { return 0l; }
+    return cast<unsigned long>(this.node().count);
+}
+
+public f<JV> JV.first() {
+    JV handle;
+    if this.idx < 0 { return handle; }
+    handle.doc = this.doc;
+    handle.idx = this.node().firstChild;
+    return handle;
+}
+
+public f<JV> JV.after() {
+    JV handle;
+    if this.idx < 0 { return handle; }
+    handle.doc = this.doc;
+    handle.idx = this.node().next;
+    return handle;
+}
+
+public f<JV> JV.at(unsigned long index) {
+    JV handle = this.first();
+    unsigned long i = 0l;
+    while handle.idx >= 0 && i < index {
+        handle = handle.after();
+        i++;
+    }
+    return handle;
+}
+
+public f<JV> JV.get(string key) {
+    JV handle = this.first();
+    if this.idx < 0 || this.node().kind != J_OBJECT { return missingJson(); }
+    while handle.idx >= 0 {
+        const JNode& child = handle.node();
+        if child.hasKey && !child.keyEscaped {
+            const unsigned long keyLen = child.keyEnd - child.keyStart;
+            if keyLen == getRawLength(key) {
+                bool same = true;
+                for unsigned long i = 0l; i < keyLen; i++ {
+                    if this.doc.src[child.keyStart + i] != key[i] { same = false; break; }
+                }
+                if same { return handle; }
+            }
+        }
+        handle = handle.after();
+    }
+    return handle;
+}
+
+/**
+ * Key of an object member
+ */
+public f<String> JV.keyName() {
+    if this.idx < 0 { return String(""); }
+    const JNode& n = this.node();
+    if !n.hasKey { return String(""); }
+    return unescapeJson(this.doc.src, n.keyStart, n.keyEnd, n.keyEscaped);
+}
+
+/**
+ * Text content: unescaped for strings, the literal for numbers and booleans, empty for null and missing values
+ */
+public f<String> JV.str() {
+    if this.idx < 0 { return String(""); }
+    const JNode& n = this.node();
+    if n.kind == J_STRING { return unescapeJson(this.doc.src, n.start, n.end, n.escaped); }
+    if n.kind == J_NUMBER || n.kind == J_BOOL { return this.doc.src.getSubstring(n.start, cast<long>(n.end - n.start)); }
+    return String("");
+}
+
+public f<long> JV.num() {
+    if this.idx < 0 { return 0l; }
+    const JNode& n = this.node();
+    if n.kind != J_NUMBER && n.kind != J_STRING { return 0l; }
+    String text = this.str();
+    // Drop a fractional part or exponent
+    const long dot = text.find('.');
+    if dot >= 0l { text = text.getSubstring(0l, dot); }
+    return parseLong(text);
+}
+
+public f<bool> JV.truthy() {
+    if this.idx < 0 { return false; }
+    const JNode& n = this.node();
+    if n.kind == J_BOOL { return this.doc.src[n.start] == 't'; }
+    if n.kind == J_NUMBER { return this.num() != 0l; }
+    return false;
+}
+
+public f<String> JV.getStr(string key) {
+    JV child = this.get(key);
+    return child.str();
+}
+
+public f<long> JV.getNum(string key) {
+    JV child = this.get(key);
+    return child.num();
+}
+
+public f<bool> JV.getBool(string key) {
+    JV child = this.get(key);
+    return child.truthy();
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Writing
+// ---------------------------------------------------------------------------------------------------------------------
+
+public type JsonWriter struct {
+    public String out
+    public Vector<int> isFirst
+    public bool afterKey = false
+}
+
+p JsonWriter.prepare() {
+    if this.afterKey { this.afterKey = false; return; }
+    if this.isFirst.getSize() == 0l { return; }
+    const unsigned long top = this.isFirst.getSize() - 1l;
+    int& slot = this.isFirst.get(top);
+    if slot == 1 { slot = 0; } else { this.out.append(','); }
+}
+
+public p JsonWriter.beginObject() {
+    this.prepare();
+    this.out.append('{');
+    this.isFirst.pushBack(1);
+}
+
+public p JsonWriter.endObject() {
+    this.isFirst.popBack();
+    this.out.append('}');
+}
+
+public p JsonWriter.beginArray() {
+    this.prepare();
+    this.out.append('[');
+    this.isFirst.pushBack(1);
+}
+
+public p JsonWriter.endArray() {
+    this.isFirst.popBack();
+    this.out.append(']');
+}
+
+public p JsonWriter.key(string name) {
+    this.prepare();
+    this.out += "\"";
+    this.out += jsonEscape(String(name));
+    this.out += "\":";
+    this.afterKey = true;
+}
+
+public p JsonWriter.key(const String& name) {
+    this.prepare();
+    this.out += "\"";
+    this.out += jsonEscape(name);
+    this.out += "\":";
+    this.afterKey = true;
+}
+
+public p JsonWriter.str(const String& value) {
+    this.prepare();
+    this.out += "\"";
+    this.out += jsonEscape(value);
+    this.out += "\"";
+}
+
+public p JsonWriter.num(long value) {
+    this.prepare();
+    this.out += fmtLong(value);
+}
+
+public p JsonWriter.boolean(bool value) {
+    this.prepare();
+    this.out += value ? "true" : "false";
+}
+
+public p JsonWriter.nullValue() {
+    this.prepare();
+    this.out += "null";
+}
+
+/**
+ * Append an already serialized JSON value
+ */
+public p JsonWriter.raw(const String& json) {
+    this.prepare();
+    this.out += json;
+}
+
+public p JsonWriter.kStr(string name, const String& value) {
+    this.key(name);
+    this.str(value);
+}
+
+public p JsonWriter.kStr(const String& name, const String& value) {
+    this.key(name);
+    this.str(value);
+}
+
+public p JsonWriter.kNum(string name, long value) {
+    this.key(name);
+    this.num(value);
+}
+
+public p JsonWriter.kBool(string name, bool value) {
+    this.key(name);
+    this.boolean(value);
+}
+
+public f<String> JsonWriter.finish() {
+    return this.out;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------------------------------------------------
+
+#[test]
+f<bool> testJsonParse() {
+    JV doc = parseJson(String("{\"a\": 1, \"b\": [true, null, \"x\\ny\\u00e9\\ud83d\\ude00\"], \"c\": {\"d\": -42.5}, \"e\": \"\"}"));
+    assert doc.exists();
+    assert doc.getNum("a") == 1l;
+    JV arr = doc.get("b");
+    assert arr.size() == 3l;
+    JV first = arr.at(0l);
+    assert first.truthy();
+    JV second = arr.at(1l);
+    assert second.isNull();
+    JV third = arr.at(2l);
+    assert third.str() == "x\nyé😀";
+    JV c = doc.get("c");
+    assert c.getNum("d") == -42l;
+    assert doc.getStr("e") == "";
+    JV missing = doc.get("missing");
+    assert !missing.exists();
+    assert missing.getStr("deep") == "";
+    return true;
+}
+
+#[test]
+f<bool> testJsonInvalid() {
+    JV a = parseJson(String("{\"a\": "));
+    assert !a.exists();
+    JV b = parseJson(String("[1, 2"));
+    assert !b.exists();
+    JV c = parseJson(String("{} x"));
+    assert !c.exists();
+    JV d = parseJson(String(" [ ] "));
+    assert d.isArray();
+    return true;
+}
+
+#[test]
+f<bool> testJsonIterate() {
+    JV doc = parseJson(String("[{\"n\":\"a\"},{\"n\":\"b\"},{\"n\":\"c\"}]"));
+    String names;
+    for JV item = doc.first(); item.exists(); item = item.after() { names += item.getStr("n"); }
+    assert names == "abc";
+    return true;
+}
+
+#[test]
+f<bool> testJsonWriter() {
+    JsonWriter w;
+    w.beginObject();
+    w.kStr("name", String("a\"b"));
+    w.kNum("n", 12l);
+    w.key("list");
+    w.beginArray();
+    w.num(1l);
+    w.str(String("x"));
+    w.beginObject();
+    w.kBool("ok", true);
+    w.endObject();
+    w.endArray();
+    w.key("nothing");
+    w.nullValue();
+    w.endObject();
+    assert w.finish() == "{\"name\":\"a\\\"b\",\"n\":12,\"list\":[1,\"x\",{\"ok\":true}],\"nothing\":null}";
+    return true;
+}

@@ -1,0 +1,186 @@
+import "std/data/vector";
+import "./libc";
+import "./util";
+import "./json";
+import "./core";
+import "./layout";
+import "./auth";
+import "./pages_public";
+import "./pages_package";
+import "./dashboard";
+import "./admin";
+import "./api";
+import "./tasks";
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Entry points of the wasm module and the request router.
+//
+// Host protocol (see host/runtime.mjs):
+//   rackArenaReset(heapBase, memorySize)   hand over the memory and drop everything from the previous call
+//   rackAlloc(size)                        reserve a buffer for the input
+//   rackStep(ptr, len)                     process the input JSON; returns a pointer to the output JSON
+//   rackOutLength()                        byte length of that output
+// ---------------------------------------------------------------------------------------------------------------------
+
+long OUT_LENGTH = 0l;
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Routing
+// ---------------------------------------------------------------------------------------------------------------------
+
+f<String> routeApi(Ctx& ctx, const Vector<String>& segments) {
+    // segments: api v1 packages {name} versions {version} [download]
+    const unsigned long count = segments.getSize();
+    if segments.get(1l) != "v1" || count < 3l { return handleApiNotFound(ctx); }
+    const String resource = segments.get(2l);
+    if resource == "packages" {
+        if count == 3l { return handleApiPackages(ctx); }
+        const String name = urlDecode(segments.get(3l));
+        if !isValidPackageName(name) { return handleApiNotFound(ctx); }
+        if count == 4l { return handleApiPackage(ctx, name); }
+        if count >= 6l && segments.get(4l) == "versions" {
+            const String version = urlDecode(segments.get(5l));
+            if count == 6l { return handleApiVersion(ctx, name, version); }
+            if count == 7l && segments.get(6l) == "download" { return handleDownload(ctx, name, version); }
+        }
+        return handleApiNotFound(ctx);
+    }
+    if resource == "tags" && count == 3l { return handleApiTags(ctx); }
+    if resource == "stats" && count == 3l { return handleApiStats(ctx); }
+    return handleApiNotFound(ctx);
+}
+
+f<String> route(Ctx& ctx) {
+    const String path = ctx.path;
+    const bool isGet = ctx.method == "GET";
+    const bool isPost = ctx.method == "POST";
+
+    if ctx.method == "TASK" {
+        if path == "/tasks/sync" { return handleSyncTask(ctx); }
+        return notFound(ctx);
+    }
+    if !isGet && !isPost { return badRequest(ctx, String("Unsupported method.")); }
+
+    const Vector<String> parts = split(tail(path, 1l), '/');
+    Vector<String> segments;
+    for unsigned long i = 0l; i < parts.getSize(); i++ {
+        // A trailing slash is fine, empty segments in the middle are not
+        const String segment = parts.get(i);
+        if segment.isEmpty() && i + 1l == parts.getSize() { continue; }
+        segments.pushBack(segment);
+    }
+    const unsigned long count = segments.getSize();
+    if count == 0l { return handleHome(ctx); }
+    const String first = segments.get(0l);
+
+    if first == "api" {
+        if isPost { return apiMethodNotAllowed(ctx); }
+        return routeApi(ctx, segments);
+    }
+
+    if isGet {
+        if first == "packages" {
+            if count == 1l { return handleSearch(ctx); }
+            const String name = urlDecode(segments.get(1l));
+            if count == 2l && isValidPackageName(name) { return handlePackagePage(ctx, name); }
+            return notFound(ctx);
+        }
+        if first == "docs" && count == 2l && segments.get(1l) == "publishing" { return handlePublishingDocs(ctx); }
+        if path == "/robots.txt" { return handleRobots(ctx); }
+        if path == "/sitemap.xml" { return handleSitemap(ctx); }
+        if path == "/opensearch.xml" { return handleOpenSearch(ctx); }
+    }
+
+    if first == "auth" && count >= 2l && segments.get(1l) == "github" {
+        if count == 2l && isGet { return handleLoginStart(ctx); }
+        if count == 3l && isGet && segments.get(2l) == "callback" { return handleLoginCallback(ctx); }
+        return notFound(ctx);
+    }
+    if first == "logout" && count == 1l { return handleLogout(ctx); }
+
+    if first == "dashboard" {
+        if count == 1l && isGet { return handleDashboard(ctx); }
+        if count >= 2l && segments.get(1l) == "packages" {
+            if count == 3l && segments.get(2l) == "new" { return handleCreatePackage(ctx, false); }
+            const String name = urlDecode(count >= 3l ? segments.get(2l) : String(""));
+            if count == 3l && isValidPackageName(name) { return handleManagePackage(ctx, name, false); }
+        }
+        return notFound(ctx);
+    }
+
+    if first == "admin" {
+        if count == 1l && isGet { return handleAdminHome(ctx); }
+        const String section = count >= 2l ? segments.get(1l) : String("");
+        if section == "users" {
+            if count == 2l && isGet { return handleAdminUsers(ctx); }
+            if count == 4l && isPost { return handleAdminUserAction(ctx, segments.get(2l), segments.get(3l)); }
+        }
+        if section == "packages" {
+            if count == 2l && isGet { return handleAdminPackages(ctx); }
+            if count == 3l && segments.get(2l) == "new" { return handleCreatePackage(ctx, true); }
+            const String name = urlDecode(count >= 3l ? segments.get(2l) : String(""));
+            if count == 3l && isValidPackageName(name) { return handleManagePackage(ctx, name, true); }
+        }
+        return notFound(ctx);
+    }
+    return notFound(ctx);
+}
+
+f<String> apiMethodNotAllowed(Ctx& ctx) {
+    return ctx.jsonBody(405, String("{\"error\":\"Method not allowed\"}"));
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Exports
+// ---------------------------------------------------------------------------------------------------------------------
+
+f<String> internalError(const string message) {
+    JsonWriter w;
+    w.beginObject();
+    w.key("response");
+    w.beginObject();
+    w.kNum("status", 500l);
+    w.key("headers");
+    w.beginObject();
+    w.kStr("Content-Type", String("text/plain; charset=utf-8"));
+    w.endObject();
+    w.key("cookies");
+    w.beginArray();
+    w.endArray();
+    w.kStr("body", String(message));
+    w.endObject();
+    w.endObject();
+    return w.finish();
+}
+
+f<String> handleEnvelope(const String& input) {
+    JV env = parseJson(input);
+    if !env.exists() { return internalError("Malformed request envelope"); }
+    Ctx ctx = buildCtx(env);
+
+    // Session lookup is a batch of its own, only needed when the visitor sends a session cookie
+    const String sessionId = ctx.cookie(SESSION_COOKIE);
+    if sessionId.getLength() == 64l {
+        ctx.base = 1;
+        if ctx.stage == 0 { return sessionLookupBatch(ctx); }
+        applySession(ctx);
+    }
+    return route(ctx);
+}
+
+#[core.compiler.mangle = false]
+public f<unsigned int> rackStep(unsigned int ptr, unsigned int len) {
+    String input;
+    unsafe {
+        string raw = cast<string>(cast<unsigned long>(ptr));
+        input = String(raw);
+    }
+    String output = handleEnvelope(input);
+    OUT_LENGTH = cast<long>(output.getLength());
+    unsafe { return cast<unsigned int>(cast<unsigned long>(output.getRaw())); }
+}
+
+#[core.compiler.mangle = false]
+public f<unsigned int> rackOutLength() {
+    return cast<unsigned int>(OUT_LENGTH);
+}

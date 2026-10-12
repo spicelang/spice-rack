@@ -1,0 +1,254 @@
+import "std/data/vector";
+import "./util";
+import "./json";
+import "./core";
+import "./layout";
+import "./search";
+import "./semver";
+
+// ---------------------------------------------------------------------------------------------------------------------
+// JSON API (/api/v1) and the counted download endpoint
+// ---------------------------------------------------------------------------------------------------------------------
+
+f<String> apiError(Ctx& ctx, int status, const String& message) {
+    JsonWriter w;
+    w.beginObject();
+    w.kStr("error", message);
+    w.endObject();
+    return ctx.jsonBody(status, w.finish());
+}
+
+p apiHeaders(Ctx& ctx) {
+    ctx.header("Access-Control-Allow-Origin", "*");
+    ctx.header("Cache-Control", "public, max-age=30");
+}
+
+p writeTags(JsonWriter& w, const String& tags) {
+    w.beginArray();
+    if !tags.isEmpty() {
+        const Vector<String> list = split(tags, ',');
+        for unsigned long i = 0l; i < list.getSize(); i++ { w.str(list.get(i)); }
+    }
+    w.endArray();
+}
+
+p writePackageSummary(JsonWriter& w, JV row, const String& baseUrl) {
+    w.beginObject();
+    w.kStr("name", row.getStr("name"));
+    w.kStr("description", row.getStr("description"));
+    w.kStr("repository", String("https://github.com/") + row.getStr("repo_owner") + "/" + row.getStr("repo_name"));
+    w.kStr("homepage", row.getStr("homepage"));
+    w.kStr("license", row.getStr("license"));
+    w.kStr("maintainer", row.getStr("owner_login"));
+    w.key("tags");
+    writeTags(w, row.getStr("tags"));
+    const String latest = row.getStr("latest_version");
+    w.key("latestVersion");
+    if latest.isEmpty() { w.nullValue(); } else { w.str(latest); }
+    w.kNum("downloads", row.getNum("downloads_total"));
+    w.kNum("stars", row.getNum("stars"));
+    w.kStr("updatedAt", row.getStr("updated_at"));
+    w.kStr("url", baseUrl + "/packages/" + urlEncode(row.getStr("name")));
+    w.endObject();
+}
+
+/**
+ * GET /api/v1/packages
+ */
+public f<String> handleApiPackages(Ctx& ctx) {
+    SearchParams sp = parseSearchParams(ctx);
+    if ctx.step() == 0 {
+        Batch batch;
+        Sql count = sp.countQuery();
+        batch.query(count);
+        Sql list = sp.listQuery();
+        batch.query(list);
+        return batch.finish();
+    }
+    JV countRows = ctx.rows(0, 0l);
+    JV countRow = countRows.first();
+    JV rows = ctx.rows(0, 1l);
+    JsonWriter w;
+    w.beginObject();
+    w.kNum("total", countRow.getNum("total"));
+    w.kNum("page", sp.page);
+    w.kNum("perPage", sp.perPage);
+    w.key("packages");
+    w.beginArray();
+    for JV row = rows.first(); row.exists(); row = row.after() { writePackageSummary(w, row, ctx.config.baseUrl); }
+    w.endArray();
+    w.endObject();
+    apiHeaders(ctx);
+    return ctx.jsonBody(200, w.finish());
+}
+
+p writeVersion(JsonWriter& w, JV v, const String& packageName, JV deps) {
+    w.beginObject();
+    w.kStr("version", v.getStr("version"));
+    w.kStr("tag", v.getStr("tag_name"));
+    w.kStr("publishedAt", v.getStr("published_at"));
+    w.kBool("prerelease", v.getNum("prerelease") == 1l);
+    w.kNum("downloads", v.getNum("downloads"));
+    w.kStr("download", String("/api/v1/packages/") + urlEncode(packageName) + "/versions/" + urlEncode(v.getStr("version")) + "/download");
+    w.key("dependencies");
+    w.beginObject();
+    for JV d = deps.first(); d.exists(); d = d.after() {
+        if d.getStr("version") != v.getStr("version") || d.getNum("dev") == 1l { continue; }
+        w.kStr(d.getStr("dep_name"), d.getStr("constraint_text"));
+    }
+    w.endObject();
+    w.endObject();
+}
+
+/**
+ * GET /api/v1/packages/{name}
+ */
+public f<String> handleApiPackage(Ctx& ctx, const String& name) {
+    if ctx.step() == 0 {
+        Batch batch;
+        Sql info = Sql("SELECT p.name, p.description, p.repo_owner, p.repo_name, p.homepage, p.license, p.stars, p.downloads_total, p.updated_at, p.created_at, u.login AS owner_login, " +
+                       String("lv.version AS latest_version, (SELECT GROUP_CONCAT(t.tag ORDER BY t.tag SEPARATOR ',') FROM package_tags t WHERE t.package_id = p.id) AS tags ") +
+                       "FROM packages p JOIN users u ON u.id = p.owner_id LEFT JOIN package_versions lv ON lv.id = p.latest_version_id WHERE p.name = ");
+        info.ps(name);
+        batch.query(info);
+        Sql versions = Sql("SELECT v.version, v.tag_name, v.prerelease, v.published_at, v.downloads FROM package_versions v JOIN packages p ON p.id = v.package_id WHERE p.name = ");
+        versions.ps(name);
+        versions.sql(" ORDER BY v.published_at DESC, v.id DESC");
+        batch.query(versions);
+        Sql deps = Sql("SELECT v.version, d.dep_name, d.constraint_text, d.dev FROM package_dependencies d JOIN package_versions v ON v.id = d.version_id JOIN packages p ON p.id = v.package_id WHERE p.name = ");
+        deps.ps(name);
+        batch.query(deps);
+        return batch.finish();
+    }
+    JV infoRows = ctx.rows(0, 0l);
+    JV info = infoRows.first();
+    if !info.exists() { return apiError(ctx, 404, String("Package not found")); }
+    JV versions = ctx.rows(0, 1l);
+    JV deps = ctx.rows(0, 2l);
+    JsonWriter w;
+    w.beginObject();
+    w.key("package");
+    writePackageSummary(w, info, ctx.config.baseUrl);
+    w.key("versions");
+    w.beginArray();
+    for JV v = versions.first(); v.exists(); v = v.after() { writeVersion(w, v, name, deps); }
+    w.endArray();
+    w.endObject();
+    apiHeaders(ctx);
+    return ctx.jsonBody(200, w.finish());
+}
+
+/**
+ * GET /api/v1/packages/{name}/versions/{version}  (version may be "latest")
+ */
+public f<String> handleApiVersion(Ctx& ctx, const String& name, const String& version) {
+    if ctx.step() == 0 {
+        Batch batch;
+        Sql sql = Sql("SELECT v.version, v.tag_name, v.prerelease, v.published_at, v.downloads, v.changelog FROM package_versions v JOIN packages p ON p.id = v.package_id WHERE p.name = ");
+        sql.ps(name);
+        if version == "latest" { sql.sql(" AND v.id = p.latest_version_id"); }
+        else { sql.sql(" AND v.version = "); sql.ps(version); }
+        batch.query(sql);
+        Sql deps = Sql("SELECT v.version, d.dep_name, d.constraint_text, d.dev FROM package_dependencies d JOIN package_versions v ON v.id = d.version_id JOIN packages p ON p.id = v.package_id WHERE p.name = ");
+        deps.ps(name);
+        if version == "latest" { deps.sql(" AND v.id = p.latest_version_id"); }
+        else { deps.sql(" AND v.version = "); deps.ps(version); }
+        batch.query(deps);
+        return batch.finish();
+    }
+    JV rows = ctx.rows(0, 0l);
+    JV v = rows.first();
+    if !v.exists() { return apiError(ctx, 404, String("Version not found")); }
+    JV deps = ctx.rows(0, 1l);
+    JsonWriter w;
+    writeVersion(w, v, name, deps);
+    apiHeaders(ctx);
+    return ctx.jsonBody(200, w.finish());
+}
+
+/**
+ * GET /api/v1/packages/{name}/versions/{version}/download: counts the download and sends the client to the archive
+ */
+public f<String> handleDownload(Ctx& ctx, const String& name, const String& version) {
+    if ctx.step() == 0 {
+        Batch batch;
+        Sql sql = Sql("SELECT v.id, v.package_id, v.tarball_url FROM package_versions v JOIN packages p ON p.id = v.package_id WHERE p.name = ");
+        sql.ps(name);
+        if version == "latest" { sql.sql(" AND v.id = p.latest_version_id"); }
+        else { sql.sql(" AND v.version = "); sql.ps(version); }
+        batch.query(sql);
+        return batch.finish();
+    }
+    JV rows = ctx.rows(0, 0l);
+    JV v = rows.first();
+    if !v.exists() { return apiError(ctx, 404, String("Version not found")); }
+    const String target = v.getStr("tarball_url");
+    if ctx.step() == 1 {
+        Batch batch;
+        batch.tx = true;
+        Sql bump = Sql("UPDATE package_versions SET downloads = downloads + 1 WHERE id = ");
+        bump.pn(v.getNum("id"));
+        batch.query(bump);
+        Sql total = Sql("UPDATE packages SET downloads_total = downloads_total + 1 WHERE id = ");
+        total.pn(v.getNum("package_id"));
+        batch.query(total);
+        Sql daily = Sql("INSERT INTO package_stats_daily (package_id, day, downloads) VALUES (");
+        daily.pn(v.getNum("package_id"));
+        daily.sql(", UTC_DATE(), 1) ON DUPLICATE KEY UPDATE downloads = downloads + 1");
+        batch.query(daily);
+        return batch.finish();
+    }
+    ctx.header("Cache-Control", "no-store");
+    return ctx.redirectTemporary(target);
+}
+
+/**
+ * GET /api/v1/tags
+ */
+public f<String> handleApiTags(Ctx& ctx) {
+    if ctx.step() == 0 {
+        Batch batch;
+        Sql tags = topTagsQuery(200l);
+        batch.query(tags);
+        return batch.finish();
+    }
+    JV rows = ctx.rows(0, 0l);
+    JsonWriter w;
+    w.beginArray();
+    for JV row = rows.first(); row.exists(); row = row.after() {
+        w.beginObject();
+        w.kStr("tag", row.getStr("tag"));
+        w.kNum("packages", row.getNum("packages"));
+        w.endObject();
+    }
+    w.endArray();
+    apiHeaders(ctx);
+    return ctx.jsonBody(200, w.finish());
+}
+
+/**
+ * GET /api/v1/stats
+ */
+public f<String> handleApiStats(Ctx& ctx) {
+    if ctx.step() == 0 {
+        Batch batch;
+        batch.simple("SELECT (SELECT COUNT(*) FROM packages) AS packages, (SELECT COUNT(*) FROM package_versions) AS versions, " +
+                     String("(SELECT COALESCE(SUM(downloads_total), 0) FROM packages) AS downloads, (SELECT COUNT(*) FROM users WHERE role = 'admin' OR id IN (SELECT owner_id FROM packages)) AS maintainers"));
+        return batch.finish();
+    }
+    JV rows = ctx.rows(0, 0l);
+    JV row = rows.first();
+    JsonWriter w;
+    w.beginObject();
+    w.kNum("packages", row.getNum("packages"));
+    w.kNum("versions", row.getNum("versions"));
+    w.kNum("downloads", row.getNum("downloads"));
+    w.kNum("maintainers", row.getNum("maintainers"));
+    w.endObject();
+    apiHeaders(ctx);
+    return ctx.jsonBody(200, w.finish());
+}
+
+public f<String> handleApiNotFound(Ctx& ctx) {
+    return apiError(ctx, 404, String("Unknown API endpoint"));
+}

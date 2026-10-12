@@ -1,0 +1,480 @@
+import "std/data/vector";
+import "std/text/analysis";
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Small string helpers shared by all other modules. Everything here is pure, so it can be unit-tested natively.
+// ---------------------------------------------------------------------------------------------------------------------
+
+const string HEX_DIGITS = "0123456789abcdef";
+const string HEX_UPPER = "0123456789ABCDEF";
+
+public type KeyValue struct {
+    public String key
+    public String value
+}
+
+/**
+ * Convert a signed integer to its decimal representation
+ */
+public f<String> fmtLong(long value) {
+    if value == 0l { return String("0"); }
+    String digits;
+    bool negative = value < 0l;
+    // Work on the negative magnitude, so LONG_MIN does not overflow
+    long rest = negative ? value : -value;
+    while rest != 0l {
+        const long digit = -(rest % 10l);
+        digits.append(cast<char>(48 + cast<int>(digit)));
+        rest /= 10l;
+    }
+    if negative { digits.append('-'); }
+    digits.reverse();
+    return digits;
+}
+
+/**
+ * Parse a decimal integer. Returns the fallback if the input is empty or not numeric.
+ */
+public f<long> parseLong(const String& input, long fallback = 0l) {
+    const unsigned long len = input.getLength();
+    if len == 0l { return fallback; }
+    unsigned long i = 0l;
+    bool negative = false;
+    if input[0l] == '-' { negative = true; i = 1l; }
+    if i >= len || len - i > 18l { return fallback; }
+    long acc = 0l;
+    while i < len {
+        const char c = input[i];
+        if c < '0' || c > '9' { return fallback; }
+        acc = acc * 10l + cast<long>(cast<int>(c) - 48);
+        i++;
+    }
+    return negative ? -acc : acc;
+}
+
+/**
+ * Format a count in a compact way: 950 -> "950", 12400 -> "12.4k", 3100000 -> "3.1M"
+ */
+public f<String> fmtCount(long value) {
+    if value < 1000l { return fmtLong(value); }
+    String suffix = String("k");
+    long scaled = value * 10l / 1000l;
+    if value >= 1000000l { suffix = String("M"); scaled = value * 10l / 1000000l; }
+    String acc = fmtLong(scaled / 10l);
+    if scaled < 1000l && scaled % 10l != 0l { acc += "." + fmtLong(scaled % 10l); }
+    return acc + suffix;
+}
+
+/**
+ * Format a count with thousands separators: 1234567 -> "1,234,567"
+ */
+public f<String> fmtThousands(long value) {
+    const String raw = fmtLong(value);
+    String acc;
+    const unsigned long len = raw.getLength();
+    for unsigned long i = 0l; i < len; i++ {
+        if i > 0l && (len - i) % 3l == 0l && raw[i - 1l] != '-' { acc.append(','); }
+        acc.append(raw[i]);
+    }
+    return acc;
+}
+
+public f<String> lower(const String& input) {
+    String acc;
+    const unsigned long len = input.getLength();
+    for unsigned long i = 0l; i < len; i++ {
+        char c = input[i];
+        if c >= 'A' && c <= 'Z' { c = cast<char>(cast<int>(c) + 32); }
+        acc.append(c);
+    }
+    return acc;
+}
+
+public f<bool> isSpaceChar(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+/**
+ * Split by a separator character. Empty parts are kept.
+ */
+public f<Vector<String>> split(const String& input, char separator) {
+    Vector<String> parts;
+    String current;
+    const unsigned long len = input.getLength();
+    for unsigned long i = 0l; i < len; i++ {
+        const char c = input[i];
+        if c == separator {
+            parts.pushBack(current);
+            current = String("");
+        } else {
+            current.append(c);
+        }
+    }
+    parts.pushBack(current);
+    return parts;
+}
+
+public f<String> joinPath(const Vector<String>& parts, string separator) {
+    String acc;
+    const unsigned long count = parts.getSize();
+    for unsigned long i = 0l; i < count; i++ {
+        if i > 0l { acc += separator; }
+        acc += parts.get(i);
+    }
+    return acc;
+}
+
+/**
+ * Cut off the first index characters and return the rest
+ */
+public f<String> tail(const String& input, unsigned long from) {
+    if from >= input.getLength() { return String(""); }
+    return input.getSubstring(from);
+}
+
+public f<String> head(const String& input, unsigned long count) {
+    if count >= input.getLength() { return input; }
+    return input.getSubstring(0l, cast<long>(count));
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Escaping
+// ---------------------------------------------------------------------------------------------------------------------
+
+/**
+ * Escape a string for the use in HTML text and attribute values
+ */
+public f<String> esc(const String& input) {
+    String acc;
+    const unsigned long len = input.getLength();
+    for unsigned long i = 0l; i < len; i++ {
+        const char c = input[i];
+        if c == '&' { acc += "&amp;"; }
+        else if c == '<' { acc += "&lt;"; }
+        else if c == '>' { acc += "&gt;"; }
+        else if c == '"' { acc += "&quot;"; }
+        else if c == '\'' { acc += "&#39;"; }
+        else { acc.append(c); }
+    }
+    return acc;
+}
+
+public f<String> esc(string input) {
+    return esc(String(input));
+}
+
+/**
+ * Percent-encode a string for the use in URLs
+ */
+public f<String> urlEncode(const String& input) {
+    String acc;
+    const unsigned long len = input.getLength();
+    for unsigned long i = 0l; i < len; i++ {
+        const char c = input[i];
+        const bool plain = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                           c == '-' || c == '_' || c == '.' || c == '~';
+        if plain {
+            acc.append(c);
+        } else {
+            const int code = cast<int>(c) & 255;
+            acc.append('%');
+            acc.append(HEX_UPPER[code / 16]);
+            acc.append(HEX_UPPER[code % 16]);
+        }
+    }
+    return acc;
+}
+
+public f<int> hexValue(char c) {
+    if c >= '0' && c <= '9' { return cast<int>(c) - 48; }
+    if c >= 'a' && c <= 'f' { return cast<int>(c) - 87; }
+    if c >= 'A' && c <= 'F' { return cast<int>(c) - 55; }
+    return -1;
+}
+
+/**
+ * Decode percent-escapes. Plus signs become spaces (form encoding).
+ */
+public f<String> urlDecode(const String& input) {
+    String acc;
+    const unsigned long len = input.getLength();
+    unsigned long i = 0l;
+    while i < len {
+        const char c = input[i];
+        if c == '+' {
+            acc.append(' ');
+        } else if c == '%' && i + 2l < len + 0l && hexValue(input[i + 1l]) >= 0 && hexValue(input[i + 2l]) >= 0 {
+            acc.append(cast<char>(hexValue(input[i + 1l]) * 16 + hexValue(input[i + 2l])));
+            i += 2l;
+        } else {
+            acc.append(c);
+        }
+        i++;
+    }
+    return acc;
+}
+
+/**
+ * Escape a string for the use in a JSON string literal (without the surrounding quotes)
+ */
+public f<String> jsonEscape(const String& input) {
+    String acc;
+    const unsigned long len = input.getLength();
+    for unsigned long i = 0l; i < len; i++ {
+        const char c = input[i];
+        const int code = cast<int>(c) & 255;
+        if c == '"' { acc += "\\\""; }
+        else if c == '\\' { acc += "\\\\"; }
+        else if c == '\n' { acc += "\\n"; }
+        else if c == '\r' { acc += "\\r"; }
+        else if c == '\t' { acc += "\\t"; }
+        else if code < 32 {
+            acc += "\\u00";
+            acc.append(HEX_DIGITS[code / 16]);
+            acc.append(HEX_DIGITS[code % 16]);
+        } else { acc.append(c); }
+    }
+    return acc;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Query strings / forms
+// ---------------------------------------------------------------------------------------------------------------------
+
+/**
+ * Parsed key/value list of a query string or an urlencoded form body
+ */
+public type Params struct {
+    public Vector<KeyValue> items
+}
+
+public p Params.ctor(const String& encoded = String("")) {
+    if encoded.isEmpty() { return; }
+    const Vector<String> pairs = split(encoded, '&');
+    for unsigned long i = 0l; i < pairs.getSize(); i++ {
+        const String& pair = pairs.get(i);
+        if pair.isEmpty() { continue; }
+        const long eq = pair.find('=');
+        KeyValue kv;
+        if eq < 0l {
+            kv.key = urlDecode(pair);
+        } else {
+            kv.key = urlDecode(pair.getSubstring(0l, eq));
+            kv.value = urlDecode(pair.getSubstring(cast<unsigned long>(eq) + 1l));
+        }
+        this.items.pushBack(kv);
+    }
+}
+
+public f<bool> Params.has(string key) {
+    for unsigned long i = 0l; i < this.items.getSize(); i++ {
+        if this.items.get(i).key == key { return true; }
+    }
+    return false;
+}
+
+/**
+ * Get the first value for a key, or the empty string
+ */
+public f<String> Params.get(string key) {
+    for unsigned long i = 0l; i < this.items.getSize(); i++ {
+        if this.items.get(i).key == key { return this.items.get(i).value; }
+    }
+    return String("");
+}
+
+public f<Vector<String>> Params.getAll(string key) {
+    Vector<String> values;
+    for unsigned long i = 0l; i < this.items.getSize(); i++ {
+        if this.items.get(i).key == key { values.pushBack(this.items.get(i).value); }
+    }
+    return values;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Dates. The host hands us MySQL style UTC timestamps: "2026-10-12 19:43:11"
+// ---------------------------------------------------------------------------------------------------------------------
+
+const string MONTHS = "JanFebMarAprMayJunJulAugSepOctNovDec";
+
+/**
+ * "2026-10-12 19:43:11" -> "12 Oct 2026". Returns the input unchanged if it does not look like a timestamp.
+ */
+public f<String> fmtDate(const String& timestamp) {
+    if timestamp.getLength() < 10l || timestamp[4l] != '-' || timestamp[7l] != '-' { return timestamp; }
+    const long month = parseLong(timestamp.getSubstring(5l, 2l));
+    if month < 1l || month > 12l { return timestamp; }
+    String day = timestamp.getSubstring(8l, 2l);
+    if day[0l] == '0' { day = day.getSubstring(1l); }
+    const String allMonths = String(MONTHS);
+    const String monthName = allMonths.getSubstring(cast<unsigned long>((month - 1l) * 3l), 3l);
+    return day + " " + monthName + " " + timestamp.getSubstring(0l, 4l);
+}
+
+public f<String> fmtDateTime(const String& timestamp) {
+    if timestamp.getLength() < 16l { return fmtDate(timestamp); }
+    return fmtDate(timestamp) + ", " + timestamp.getSubstring(11l, 5l) + " UTC";
+}
+
+/**
+ * Day-of-month part of a "YYYY-MM-DD" date, as short label for chart axes: "12 Oct"
+ */
+public f<String> fmtDayShort(const String& date) {
+    const String full = fmtDate(date);
+    const long lastSpace = full.rfind(' ');
+    if lastSpace < 0l { return full; }
+    return full.getSubstring(0l, lastSpace);
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------------------------------------------------
+
+public f<bool> isLowerAlnum(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+}
+
+/**
+ * Package names: 2-64 characters, lowercase letters, digits, '-', '_' and '.'. They must start with a letter or digit.
+ */
+public f<bool> isValidPackageName(const String& name) {
+    const unsigned long len = name.getLength();
+    if len < 2l || len > 64l || !isLowerAlnum(name[0l]) { return false; }
+    for unsigned long i = 0l; i < len; i++ {
+        const char c = name[i];
+        if !isLowerAlnum(c) && c != '-' && c != '_' && c != '.' { return false; }
+    }
+    return true;
+}
+
+/**
+ * GitHub owner and repository names: letters, digits, '-', '_' and '.'
+ */
+public f<bool> isValidGithubName(const String& name) {
+    const unsigned long len = name.getLength();
+    if len < 1l || len > 100l { return false; }
+    for unsigned long i = 0l; i < len; i++ {
+        const char c = name[i];
+        const bool ok = isLowerAlnum(c) || (c >= 'A' && c <= 'Z') || c == '-' || c == '_' || c == '.';
+        if !ok { return false; }
+    }
+    return true;
+}
+
+/**
+ * Tags are lowercase, 1-24 characters of letters, digits and '-'. Anything else is normalized away.
+ * Returns the empty string if nothing is left.
+ */
+public f<String> normalizeTag(const String& raw) {
+    String acc;
+    const unsigned long len = raw.getLength();
+    for unsigned long i = 0l; i < len; i++ {
+        char c = raw[i];
+        if c >= 'A' && c <= 'Z' { c = cast<char>(cast<int>(c) + 32); }
+        if c == ' ' || c == '_' { c = '-'; }
+        if isLowerAlnum(c) || (c == '-' && !acc.isEmpty()) {
+            if acc.getLength() < 24l { acc.append(c); }
+        }
+    }
+    while !acc.isEmpty() && acc[acc.getLength() - 1l] == '-' {
+        acc = acc.getSubstring(0l, cast<long>(acc.getLength()) - 1l);
+    }
+    return acc;
+}
+
+/**
+ * Split a comma/space separated tag list into at most maxTags distinct normalized tags
+ */
+public f<Vector<String>> parseTags(const String& raw, unsigned long maxTags = 8l) {
+    Vector<String> tags;
+    String current;
+    const unsigned long len = raw.getLength();
+    for unsigned long i = 0l; i <= len; i++ {
+        const bool boundary = i == len || raw[i] == ',' || raw[i] == ';' || raw[i] == '\n';
+        if !boundary { current.append(raw[i]); continue; }
+        const String tag = normalizeTag(current);
+        current = String("");
+        if tag.isEmpty() || tags.getSize() >= maxTags { continue; }
+        bool duplicate = false;
+        for unsigned long j = 0l; j < tags.getSize(); j++ {
+            if tags.get(j) == tag { duplicate = true; }
+        }
+        if !duplicate { tags.pushBack(tag); }
+    }
+    return tags;
+}
+
+/**
+ * Only http(s) URLs are allowed in user provided links
+ */
+public f<bool> isHttpUrl(const String& url) {
+    return url.startsWith("https://") || url.startsWith("http://");
+}
+
+public f<String> trimmed(const String& input) {
+    return input.trim();
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------------------------------------------------
+
+#[test]
+f<bool> testNumbers() {
+    assert fmtLong(0l) == "0";
+    assert fmtLong(-1204l) == "-1204";
+    assert fmtLong(9876543210l) == "9876543210";
+    assert parseLong(String("42")) == 42l;
+    assert parseLong(String("-7")) == -7l;
+    assert parseLong(String("4x"), 9l) == 9l;
+    assert parseLong(String(""), 5l) == 5l;
+    assert fmtCount(950l) == "950";
+    assert fmtCount(12400l) == "12.4k";
+    assert fmtCount(1000l) == "1k";
+    assert fmtCount(3100000l) == "3.1M";
+    assert fmtThousands(1234567l) == "1,234,567";
+    assert fmtThousands(999l) == "999";
+    return true;
+}
+
+#[test]
+f<bool> testEscaping() {
+    assert esc(String("<a href=\"x\">&'")) == "&lt;a href=&quot;x&quot;&gt;&amp;&#39;";
+    assert urlEncode(String("a b/c?d=é")) == "a%20b%2Fc%3Fd%3D%C3%A9";
+    assert urlDecode(String("a+b%2Fc%C3%A9%zz")) == "a b/cé%zz";
+    assert jsonEscape(String("a\"b\\c\nd")) == "a\\\"b\\\\c\\nd";
+    return true;
+}
+
+#[test]
+f<bool> testParams() {
+    Params params = Params(String("q=hello+world&tag=a&tag=b&flag"));
+    assert params.get("q") == "hello world";
+    const Vector<String> tagValues = params.getAll("tag");
+    assert tagValues.getSize() == 2l;
+    assert params.has("flag");
+    assert params.get("missing") == "";
+    return true;
+}
+
+#[test]
+f<bool> testDates() {
+    assert fmtDate(String("2026-10-12 19:43:11")) == "12 Oct 2026";
+    assert fmtDate(String("2026-01-03")) == "3 Jan 2026";
+    assert fmtDateTime(String("2026-10-12 19:43:11")) == "12 Oct 2026, 19:43 UTC";
+    assert fmtDayShort(String("2026-10-12")) == "12 Oct";
+    return true;
+}
+
+#[test]
+f<bool> testValidation() {
+    assert isValidPackageName(String("json-parser"));
+    assert !isValidPackageName(String("Json"));
+    assert !isValidPackageName(String("a"));
+    assert !isValidPackageName(String("-abc"));
+    assert normalizeTag(String("  Web Server ")) == "web-server";
+    const Vector<String> tags = parseTags(String("Web, cli, web;;Net_Utils"));
+    assert tags.getSize() == 3l;
+    assert tags.get(2l) == "net-utils";
+    return true;
+}

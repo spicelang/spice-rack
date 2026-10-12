@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-26.04
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: rack_test
+          MYSQL_USER: rack
+          MYSQL_PASSWORD: rack
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot --silent"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain (clang, lld)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld
+
+      - name: Set up Spice
+        uses: spicelang/spice-setup-action@v1
+
+      - name: Spice unit tests
+        run: spice test src/tests.spice
+
+      - name: Build the WebAssembly module
+        run: scripts/build-wasm.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: host/package-lock.json
+
+      - name: Install host dependencies
+        run: npm ci
+        working-directory: host
+
+      - name: End-to-end tests (real wasm and MySQL, mocked GitHub)
+        run: npm test
+        working-directory: host
+        env:
+          E2E_DB_HOST: 127.0.0.1
+          E2E_DB_PORT: 3306
+          E2E_DB_USER: rack
+          E2E_DB_PASSWORD: rack
+          E2E_DB_NAME: rack_test
+
+  docker:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build --build-arg SPICE_VERSION="$SPICE_VERSION" -t spice-rack:ci .

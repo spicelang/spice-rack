@@ -1,0 +1,345 @@
+import "std/data/vector";
+import "./util";
+import "./json";
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Request context, effect batches and response helpers.
+//
+// The wasm module has no I/O of its own. The host calls `rackStep` with the request plus the results of all effect
+// batches (database queries, HTTP calls) that were requested by earlier steps. The module answers with either
+//   * the next batch of effects it wants to have executed, or
+//   * the final HTTP response.
+// Since the module is stateless between calls, a handler is written as a function that looks at how many batches have
+// been answered so far (`ctx.step()`) and continues from there.
+// ---------------------------------------------------------------------------------------------------------------------
+
+public const string SESSION_COOKIE = "rack_session";
+
+public type Config struct {
+    public String baseUrl
+    public String githubClientId
+    public String githubClientSecret
+    public String githubApiToken
+    public String adminLogins
+    public bool secureCookies = false
+}
+
+public type User struct {
+    public bool present = false
+    public long id = 0l
+    public String login
+    public String name
+    public String avatar
+    public String role
+    public String csrf
+    public String token
+}
+
+public type Ctx struct {
+    public String method
+    public String path
+    public String rawQuery
+    public String cookieHeader
+    public String ip
+    public String userAgent
+    public String now      // "2026-10-12 19:43:11" (UTC)
+    public String random   // Fresh random hex digits for tokens
+    public Params query
+    public Params form
+    public Config config
+    public JV results
+    public int stage = 0
+    public int base = 0
+    public User user
+    public Vector<String> setCookies
+    public Vector<KeyValue> headers
+}
+
+public f<Ctx> buildCtx(JV env) {
+    Ctx ctx;
+    JV req = env.get("req");
+    ctx.method = req.getStr("method");
+    ctx.path = req.getStr("path");
+    ctx.rawQuery = req.getStr("query");
+    ctx.cookieHeader = req.getStr("cookie");
+    ctx.ip = req.getStr("ip");
+    ctx.userAgent = req.getStr("userAgent");
+    ctx.query = Params(ctx.rawQuery);
+    String contentType = req.getStr("contentType");
+    if contentType.startsWith("application/x-www-form-urlencoded") {
+        ctx.form = Params(req.getStr("body"));
+    }
+    ctx.now = env.getStr("now");
+    ctx.random = env.getStr("random");
+    JV cfg = env.get("config");
+    ctx.config.baseUrl = cfg.getStr("baseUrl");
+    ctx.config.githubClientId = cfg.getStr("githubClientId");
+    ctx.config.githubClientSecret = cfg.getStr("githubClientSecret");
+    ctx.config.githubApiToken = cfg.getStr("githubApiToken");
+    ctx.config.adminLogins = lower(cfg.getStr("adminLogins"));
+    ctx.config.secureCookies = cfg.getBool("secureCookies");
+    ctx.results = env.get("results");
+    ctx.stage = cast<int>(ctx.results.size());
+    return ctx;
+}
+
+public f<String> Ctx.cookie(string name) {
+    const Vector<String> parts = split(this.cookieHeader, ';');
+    for unsigned long i = 0l; i < parts.getSize(); i++ {
+        const String rawPart = parts.get(i);
+        const String part = rawPart.trim();
+        const long eq = part.find('=');
+        if eq < 0l { continue; }
+        if part.getSubstring(0l, eq) == name { return part.getSubstring(cast<unsigned long>(eq) + 1l); }
+    }
+    return String("");
+}
+
+public f<bool> Ctx.isPost() { return this.method == "POST"; }
+
+/**
+ * Number of effect batches the handler itself has seen answered (without the session lookup)
+ */
+public f<int> Ctx.step() { return this.stage - this.base; }
+
+/**
+ * Result of effect `idx` within handler batch `batch`
+ */
+public f<JV> Ctx.res(int batch, unsigned long idx) {
+    JV batchResults = this.results.at(cast<unsigned long>(batch + this.base));
+    return batchResults.at(idx);
+}
+
+/**
+ * Rows of a SELECT within handler batch `batch`
+ */
+public f<JV> Ctx.rows(int batch, unsigned long idx) {
+    JV r = this.res(batch, idx);
+    return r.get("rows");
+}
+
+public f<bool> Ctx.failed(int batch, unsigned long idx) {
+    JV r = this.res(batch, idx);
+    JV error = r.get("error");
+    return !r.exists() || error.exists();
+}
+
+public f<String> Ctx.errorCode(int batch, unsigned long idx) {
+    JV r = this.res(batch, idx);
+    return r.getStr("code");
+}
+
+public f<bool> Ctx.isAdmin() { return this.user.present && this.user.role == "admin"; }
+
+public f<bool> Ctx.csrfOk() {
+    if !this.user.present || this.user.csrf.isEmpty() { return false; }
+    return this.form.get("csrf") == this.user.csrf;
+}
+
+/**
+ * Trimmed value of a form field
+ */
+public f<String> Ctx.formTrim(string name) {
+    const String raw = this.form.get(name);
+    return raw.trim();
+}
+
+public f<String> Ctx.param(string name) {
+    if this.isPost() && this.form.has(name) { return this.form.get(name); }
+    return this.query.get(name);
+}
+
+public f<bool> Ctx.isBot() {
+    const String ua = lower(this.userAgent);
+    return ua.contains("bot") || ua.contains("crawler") || ua.contains("spider") || ua.contains("curl") ||
+           ua.isEmpty();
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// SQL builder
+// ---------------------------------------------------------------------------------------------------------------------
+
+/**
+ * A SQL statement with positional parameters. Everything that is not a constant goes through a parameter.
+ */
+public type Sql struct {
+    public String text
+    public JsonWriter args
+    public bool started = false
+}
+
+public p Sql.ctor(string text) {
+    this.text = String(text);
+}
+
+public p Sql.ctor(const String& text) {
+    this.text = text;
+}
+
+public p Sql.begin() {
+    if !this.started {
+        this.args.beginArray();
+        this.started = true;
+    }
+}
+
+public p Sql.sql(string fragment) { this.text += fragment; }
+public p Sql.sql(const String& fragment) { this.text += fragment; }
+
+public p Sql.s(const String& value) { this.begin(); this.args.str(value); }
+public p Sql.n(long value) { this.begin(); this.args.num(value); }
+public p Sql.nul() { this.begin(); this.args.nullValue(); }
+
+/**
+ * Append a string parameter and its placeholder in one go
+ */
+public p Sql.ps(const String& value) { this.text += "?"; this.s(value); }
+public p Sql.pn(long value) { this.text += "?"; this.n(value); }
+
+/**
+ * A batch of effects that the host executes in order before it continues the request
+ */
+public type Batch struct {
+    public JsonWriter w
+    public bool tx = false
+    public bool opened = false
+}
+
+public p Batch.open() {
+    if this.opened { return; }
+    this.opened = true;
+    this.w.beginObject();
+    this.w.key("effects");
+    this.w.beginArray();
+}
+
+public p Batch.query(Sql& sql) {
+    this.open();
+    this.w.beginObject();
+    this.w.kStr("type", String("sql"));
+    this.w.kStr("sql", sql.text);
+    this.w.key("params");
+    if sql.started {
+        sql.args.endArray();
+        this.w.raw(sql.args.finish());
+    } else {
+        this.w.raw(String("[]"));
+    }
+    this.w.endObject();
+}
+
+public p Batch.simple(string text) {
+    Sql sql = Sql(text);
+    this.query(sql);
+}
+
+public p Batch.simple(const String& text) {
+    Sql sql = Sql(text);
+    this.query(sql);
+}
+
+/**
+ * Outgoing HTTP call. Only a few well-known hosts are accepted by the host process.
+ */
+public p Batch.http(string method, const String& url, const String& accept, const String& token, const String& body = String("")) {
+    this.open();
+    this.w.beginObject();
+    this.w.kStr("type", String("http"));
+    this.w.kStr("method", String(method));
+    this.w.kStr("url", url);
+    this.w.key("headers");
+    this.w.beginObject();
+    if !accept.isEmpty() { this.w.kStr("Accept", accept); }
+    if !token.isEmpty() { this.w.kStr("Authorization", String("Bearer ") + token); }
+    if !body.isEmpty() { this.w.kStr("Content-Type", String("application/json")); }
+    this.w.endObject();
+    if !body.isEmpty() { this.w.kStr("body", body); }
+    this.w.endObject();
+}
+
+public p Batch.rawEffect(const String& json) {
+    this.open();
+    this.w.raw(json);
+}
+
+public f<unsigned long> Batch.count() { return 0l; }
+
+public f<String> Batch.finish() {
+    this.open();
+    this.w.endArray();
+    this.w.kBool("tx", this.tx);
+    this.w.endObject();
+    JsonWriter outer;
+    outer.beginObject();
+    outer.key("batch");
+    outer.raw(this.w.finish());
+    outer.endObject();
+    return outer.finish();
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Responses
+// ---------------------------------------------------------------------------------------------------------------------
+
+public p Ctx.header(string name, string value) {
+    KeyValue kv;
+    kv.key = String(name);
+    kv.value = String(value);
+    this.headers.pushBack(kv);
+}
+
+public f<String> Ctx.respond(int status, string contentType, const String& body, const String& location = String("")) {
+    JsonWriter w;
+    w.beginObject();
+    w.key("response");
+    w.beginObject();
+    w.kNum("status", cast<long>(status));
+    w.key("headers");
+    w.beginObject();
+    w.kStr("Content-Type", String(contentType));
+    if !location.isEmpty() { w.kStr("Location", location); }
+    for unsigned long i = 0l; i < this.headers.getSize(); i++ { w.kStr(this.headers.get(i).key, this.headers.get(i).value); }
+    w.endObject();
+    w.key("cookies");
+    w.beginArray();
+    for unsigned long i = 0l; i < this.setCookies.getSize(); i++ { w.str(this.setCookies.get(i)); }
+    w.endArray();
+    w.kStr("body", body);
+    w.endObject();
+    w.endObject();
+    return w.finish();
+}
+
+public f<String> Ctx.html(int status, const String& body) {
+    return this.respond(status, "text/html; charset=utf-8", body);
+}
+
+public f<String> Ctx.jsonBody(int status, const String& body) {
+    return this.respond(status, "application/json; charset=utf-8", body);
+}
+
+public f<String> Ctx.text(int status, const String& body) {
+    return this.respond(status, "text/plain; charset=utf-8", body);
+}
+
+public f<String> Ctx.redirect(const String& location) {
+    return this.respond(303, "text/plain; charset=utf-8", String(""), location);
+}
+
+public f<String> Ctx.redirectTemporary(const String& location) {
+    return this.respond(302, "text/plain; charset=utf-8", String(""), location);
+}
+
+public p Ctx.setCookie(string name, const String& value, long maxAgeSeconds) {
+    String cookie = String(name) + "=" + value + "; Path=/; HttpOnly; SameSite=Lax; Max-Age=" + fmtLong(maxAgeSeconds);
+    if this.config.secureCookies { cookie += "; Secure"; }
+    this.setCookies.pushBack(cookie);
+}
+
+/**
+ * Short-lived redirect target, e.g. "/packages/foo?notice=saved"
+ */
+public f<String> withNotice(const String& path, string notice) {
+    const String sep = path.contains("?") ? String("&") : String("?");
+    return path + sep + "notice=" + notice;
+}

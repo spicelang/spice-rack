@@ -1,0 +1,167 @@
+import "std/data/vector";
+import "./util";
+import "./json";
+import "./core";
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Package search: parameters parsed from the request and the SQL for listing and counting results.
+// Used by both the HTML pages and the JSON API.
+// ---------------------------------------------------------------------------------------------------------------------
+
+public const long PAGE_SIZE = 20l;
+
+public type SearchParams struct {
+    public String q
+    public Vector<String> tags
+    public String owner
+    public String sort
+    public long page = 1l
+    public long perPage = 20l
+}
+
+public f<String> likeEscape(const String& input) {
+    String out;
+    for unsigned long i = 0l; i < input.getLength(); i++ {
+        const char c = input[i];
+        if c == '\\' || c == '%' || c == '_' { out.append('\\'); }
+        out.append(c);
+    }
+    return out;
+}
+
+public f<SearchParams> parseSearchParams(const Ctx& ctx) {
+    SearchParams sp;
+    const String rawQ = ctx.query.get("q");
+    sp.q = head(rawQ.trim(), 100l);
+    const Vector<String> rawTags = ctx.query.getAll("tag");
+    for unsigned long i = 0l; i < rawTags.getSize() && sp.tags.getSize() < 5l; i++ {
+        const String tag = normalizeTag(rawTags.get(i));
+        if !tag.isEmpty() { sp.tags.pushBack(tag); }
+    }
+    const String rawOwner = ctx.query.get("owner");
+    sp.owner = head(rawOwner.trim(), 64l);
+    const String sort = ctx.query.get("sort");
+    if sort == "downloads" || sort == "updated" || sort == "newest" || sort == "name" || sort == "stars" || sort == "relevance" {
+        sp.sort = sort;
+    } else {
+        sp.sort = sp.q.isEmpty() ? String("downloads") : String("relevance");
+    }
+    sp.page = parseLong(ctx.query.get("page"), 1l);
+    if sp.page < 1l { sp.page = 1l; }
+    if sp.page > 100000l { sp.page = 100000l; }
+    const long perPage = parseLong(ctx.query.get("per_page"), PAGE_SIZE);
+    sp.perPage = perPage < 1l ? PAGE_SIZE : (perPage > 100l ? 100l : perPage);
+    return sp;
+}
+
+/**
+ * The query string that reproduces the filters (without paging), for links
+ */
+public f<String> SearchParams.baseQuery(bool includeSort = true) {
+    String query;
+    if !this.q.isEmpty() { query += "q=" + urlEncode(this.q); }
+    for unsigned long i = 0l; i < this.tags.getSize(); i++ {
+        if !query.isEmpty() { query += "&"; }
+        query += "tag=" + urlEncode(this.tags.get(i));
+    }
+    if !this.owner.isEmpty() {
+        if !query.isEmpty() { query += "&"; }
+        query += "owner=" + urlEncode(this.owner);
+    }
+    if includeSort {
+        if !query.isEmpty() { query += "&"; }
+        query += "sort=" + this.sort;
+    }
+    return query;
+}
+
+p SearchParams.appendFilters(Sql& sql) {
+    sql.sql(" WHERE 1 = 1");
+    if !this.q.isEmpty() {
+        const String like = String("%") + likeEscape(this.q) + "%";
+        sql.sql(" AND (p.name LIKE ");
+        sql.ps(like);
+        sql.sql(" OR p.description LIKE ");
+        sql.ps(like);
+        sql.sql(" OR EXISTS (SELECT 1 FROM package_tags tq WHERE tq.package_id = p.id AND tq.tag = ");
+        sql.ps(lower(this.q));
+        sql.sql("))");
+    }
+    for unsigned long i = 0l; i < this.tags.getSize(); i++ {
+        sql.sql(" AND EXISTS (SELECT 1 FROM package_tags tf WHERE tf.package_id = p.id AND tf.tag = ");
+        sql.ps(this.tags.get(i));
+        sql.sql(")");
+    }
+    if !this.owner.isEmpty() {
+        sql.sql(" AND u.login = ");
+        sql.ps(this.owner);
+    }
+}
+
+/**
+ * Query for the page of results with the columns that `packageCard` and the API need
+ */
+public f<Sql> SearchParams.listQuery() {
+    Sql sql = Sql("SELECT p.id, p.name, p.description, p.stars, p.downloads_total, p.updated_at, p.homepage, p.license, p.repo_owner, p.repo_name, " +
+                  String("u.login AS owner_login, lv.version AS latest_version, lv.published_at AS latest_published_at, ") +
+                  "(SELECT GROUP_CONCAT(t.tag ORDER BY t.tag SEPARATOR ',') FROM package_tags t WHERE t.package_id = p.id) AS tags, ");
+    if this.q.isEmpty() {
+        sql.sql("0 AS score");
+    } else {
+        const String lowered = lower(this.q);
+        sql.sql("(CASE WHEN p.name = ");
+        sql.ps(lowered);
+        sql.sql(" THEN 100 WHEN p.name LIKE ");
+        sql.ps(likeEscape(lowered) + "%");
+        sql.sql(" THEN 60 WHEN p.name LIKE ");
+        sql.ps(String("%") + likeEscape(lowered) + "%");
+        sql.sql(" THEN 40 ELSE 0 END) + (CASE WHEN EXISTS (SELECT 1 FROM package_tags ts WHERE ts.package_id = p.id AND ts.tag = ");
+        sql.ps(lowered);
+        sql.sql(") THEN 30 ELSE 0 END) + (CASE WHEN p.description LIKE ");
+        sql.ps(String("%") + likeEscape(this.q) + "%");
+        sql.sql(" THEN 10 ELSE 0 END) AS score");
+    }
+    sql.sql(" FROM packages p JOIN users u ON u.id = p.owner_id LEFT JOIN package_versions lv ON lv.id = p.latest_version_id");
+    this.appendFilters(sql);
+    if this.sort == "relevance" { sql.sql(" ORDER BY score DESC, p.downloads_total DESC, p.name ASC"); }
+    else if this.sort == "updated" { sql.sql(" ORDER BY p.updated_at DESC, p.name ASC"); }
+    else if this.sort == "newest" { sql.sql(" ORDER BY p.created_at DESC, p.name ASC"); }
+    else if this.sort == "stars" { sql.sql(" ORDER BY p.stars DESC, p.name ASC"); }
+    else if this.sort == "name" { sql.sql(" ORDER BY p.name ASC"); }
+    else { sql.sql(" ORDER BY p.downloads_total DESC, p.name ASC"); }
+    sql.sql(" LIMIT ");
+    sql.pn(this.perPage);
+    sql.sql(" OFFSET ");
+    sql.pn((this.page - 1l) * this.perPage);
+    return sql;
+}
+
+public f<Sql> SearchParams.countQuery() {
+    Sql sql = Sql("SELECT COUNT(*) AS total FROM packages p JOIN users u ON u.id = p.owner_id");
+    this.appendFilters(sql);
+    return sql;
+}
+
+public f<Sql> topTagsQuery(long limit) {
+    Sql sql = Sql("SELECT tag, COUNT(*) AS packages FROM package_tags GROUP BY tag ORDER BY packages DESC, tag ASC LIMIT ");
+    sql.pn(limit);
+    return sql;
+}
+
+public f<long> pageCount(long total, long perPage) {
+    return (total + perPage - 1l) / perPage;
+}
+
+#[test]
+f<bool> testSearchSql() {
+    SearchParams sp;
+    sp.q = String("json_parser");
+    sp.tags.pushBack(String("cli"));
+    sp.sort = String("relevance");
+    Sql sql = sp.listQuery();
+    assert sql.text.contains("ORDER BY score DESC");
+    assert sql.text.contains("tf.tag = ?");
+    assert likeEscape(String("a_b%c")) == "a\\_b\\%c";
+    assert sp.baseQuery() == "q=json_parser&tag=cli&sort=relevance";
+    return true;
+}

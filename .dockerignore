@@ -1,0 +1,8 @@
+build/
+node_modules/
+host/node_modules/
+.git/
+.env
+*.log
+host/test/
+host/dev/

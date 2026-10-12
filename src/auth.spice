@@ -1,0 +1,222 @@
+import "std/data/vector";
+import "./util";
+import "./json";
+import "./core";
+import "./layout";
+import "./github";
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Sessions and the GitHub OAuth login
+// ---------------------------------------------------------------------------------------------------------------------
+
+const long SESSION_SECONDS = 1209600l; // 14 days
+
+/**
+ * Batch that looks up the session of the request cookie
+ */
+public f<String> sessionLookupBatch(const Ctx& ctx) {
+    Batch batch;
+    Sql sql = Sql("SELECT s.csrf, s.github_token, u.id, u.login, u.display_name, u.avatar_url, u.role FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ");
+    sql.ps(ctx.cookie(SESSION_COOKIE));
+    sql.sql(" AND s.expires_at > ");
+    sql.ps(ctx.now);
+    sql.sql(" AND u.status = 'active'");
+    batch.query(sql);
+    return batch.finish();
+}
+
+public p applySession(Ctx& ctx) {
+    JV rows = ctx.results.at(0l);
+    JV first = rows.at(0l);
+    JV row = first.get("rows");
+    JV user = row.first();
+    if !user.exists() { return; }
+    ctx.user.present = true;
+    ctx.user.id = user.getNum("id");
+    ctx.user.login = user.getStr("login");
+    ctx.user.name = user.getStr("display_name");
+    ctx.user.avatar = user.getStr("avatar_url");
+    ctx.user.role = user.getStr("role");
+    ctx.user.csrf = user.getStr("csrf");
+    ctx.user.token = user.getStr("github_token");
+}
+
+f<bool> isAdminLogin(const Ctx& ctx, const String& login) {
+    const Vector<String> admins = split(ctx.config.adminLogins, ',');
+    const String needle = lower(login);
+    for unsigned long i = 0l; i < admins.getSize(); i++ {
+        const String entry = admins.get(i);
+        if entry.trim() == needle { return true; }
+    }
+    return false;
+}
+
+/**
+ * Only local paths are valid redirect targets after the login
+ */
+f<String> safeReturnPath(const String& path) {
+    if path.startsWith("/") && !path.startsWith("//") && !path.startsWith("/auth") && path.getLength() < 200l && !path.contains("\\") {
+        return path;
+    }
+    return String("/dashboard");
+}
+
+/**
+ * GET /auth/github: remember a state value and send the visitor to GitHub
+ */
+public f<String> handleLoginStart(Ctx& ctx) {
+    if ctx.user.present { return ctx.redirect(String("/dashboard")); }
+    if ctx.config.githubClientId.isEmpty() {
+        return ctx.html(503, errorPageHtml(ctx, 503, String("Sign-in is not configured"), String("The administrator has not configured the GitHub OAuth application yet.")));
+    }
+    const String state = head(ctx.random, 32l);
+    if ctx.step() == 0 {
+        Batch batch;
+        Sql insert = Sql("INSERT INTO oauth_states (state, created_at) VALUES (");
+        insert.ps(state);
+        insert.sql(", ");
+        insert.ps(ctx.now);
+        insert.sql(")");
+        batch.query(insert);
+        Sql cleanup = Sql("DELETE FROM oauth_states WHERE created_at < DATE_SUB(");
+        cleanup.ps(ctx.now);
+        cleanup.sql(", INTERVAL 1 HOUR)");
+        batch.query(cleanup);
+        return batch.finish();
+    }
+    return ctx.redirect(githubAuthorizeUrl(ctx, state));
+}
+
+/**
+ * GET /auth/github/callback
+ *   step 0: validate the state            step 1: exchange the code for a token
+ *   step 2: load the GitHub profile       step 3: upsert the user
+ *   step 4: create the session            -> redirect
+ */
+public f<String> handleLoginCallback(Ctx& ctx) {
+    if ctx.query.has("error") { return ctx.redirect(String("/?error=denied")); }
+    const String code = ctx.query.get("code");
+    const String state = ctx.query.get("state");
+    if code.isEmpty() || state.getLength() != 32l { return ctx.redirect(String("/?error=state")); }
+    const int step = ctx.step();
+
+    if step == 0 {
+        Batch batch;
+        Sql sql = Sql("DELETE FROM oauth_states WHERE created_at > DATE_SUB(");
+        sql.ps(ctx.now);
+        sql.sql(", INTERVAL 1 HOUR) AND state = ");
+        sql.ps(state);
+        batch.query(sql);
+        return batch.finish();
+    }
+    JV stateResult = ctx.res(0, 0l);
+    if stateResult.getNum("affected") != 1l { return ctx.redirect(String("/?error=state")); }
+
+    if step == 1 {
+        Batch batch;
+        batch.http("POST", String("https://github.com/login/oauth/access_token"), String("application/json"), String(""), githubTokenRequestBody(ctx, code));
+        return batch.finish();
+    }
+    JV tokenResponse = ctx.res(1, 0l);
+    JV tokenBody = parseJson(tokenResponse.getStr("body"));
+    const String token = tokenBody.getStr("access_token");
+    if token.isEmpty() { return ctx.redirect(String("/?error=github")); }
+
+    if step == 2 {
+        Batch batch;
+        batch.http("GET", String(GITHUB_API) + "/user", String("application/vnd.github+json"), token);
+        return batch.finish();
+    }
+    JV profileResponse = ctx.res(2, 0l);
+    JV profile = parseJson(profileResponse.getStr("body"));
+    const long githubId = profile.getNum("id");
+    const String login = profile.getStr("login");
+    if githubId <= 0l || login.isEmpty() { return ctx.redirect(String("/?error=github")); }
+
+    if step == 3 {
+        Batch batch;
+        const bool admin = isAdminLogin(ctx, login);
+        Sql upsert = Sql("INSERT INTO users (github_id, login, display_name, avatar_url, role, status, created_at, last_login_at) VALUES (");
+        upsert.pn(githubId);
+        upsert.sql(", ");
+        upsert.ps(head(login, 64l));
+        upsert.sql(", ");
+        upsert.ps(head(profile.getStr("name"), 255l));
+        upsert.sql(", ");
+        upsert.ps(head(profile.getStr("avatar_url"), 512l));
+        upsert.sql(admin ? ", 'admin', 'active', " : ", 'maintainer', 'active', ");
+        upsert.ps(ctx.now);
+        upsert.sql(", ");
+        upsert.ps(ctx.now);
+        upsert.sql(") ON DUPLICATE KEY UPDATE login = VALUES(login), display_name = VALUES(display_name), avatar_url = VALUES(avatar_url), last_login_at = VALUES(last_login_at)");
+        if admin { upsert.sql(", role = 'admin'"); }
+        batch.query(upsert);
+        Sql select = Sql("SELECT id, status FROM users WHERE github_id = ");
+        select.pn(githubId);
+        batch.query(select);
+        return batch.finish();
+    }
+    JV userRows = ctx.rows(3, 1l);
+    JV userRow = userRows.first();
+    if !userRow.exists() { return ctx.redirect(String("/?error=github")); }
+    if userRow.getStr("status") != "active" { return ctx.redirect(String("/?error=suspended")); }
+
+    const String sessionId = head(ctx.random, 64l);
+    const String csrf = tail(ctx.random, 64l);
+    if step == 4 {
+        Batch batch;
+        Sql insert = Sql("INSERT INTO sessions (id, user_id, csrf, github_token, created_at, expires_at) VALUES (");
+        insert.ps(sessionId);
+        insert.sql(", ");
+        insert.pn(userRow.getNum("id"));
+        insert.sql(", ");
+        insert.ps(head(csrf, 32l));
+        insert.sql(", ");
+        insert.ps(token);
+        insert.sql(", ");
+        insert.ps(ctx.now);
+        insert.sql(", DATE_ADD(");
+        insert.ps(ctx.now);
+        insert.sql(", INTERVAL ");
+        insert.pn(SESSION_SECONDS);
+        insert.sql(" SECOND))");
+        batch.query(insert);
+        Sql cleanup = Sql("DELETE FROM sessions WHERE expires_at < ");
+        cleanup.ps(ctx.now);
+        batch.query(cleanup);
+        return batch.finish();
+    }
+
+    ctx.setCookie(SESSION_COOKIE, sessionId, SESSION_SECONDS);
+    const String returnTo = safeReturnPath(ctx.cookie("rack_return"));
+    ctx.setCookie("rack_return", String(""), 0l);
+    return ctx.redirect(returnTo);
+}
+
+/**
+ * POST /logout
+ */
+public f<String> handleLogout(Ctx& ctx) {
+    if !ctx.isPost() { return ctx.redirect(String("/")); }
+    if !ctx.user.present { return ctx.redirect(String("/")); }
+    if !ctx.csrfOk() { return forbidden(ctx); }
+    if ctx.step() == 0 {
+        Batch batch;
+        Sql sql = Sql("DELETE FROM sessions WHERE id = ");
+        sql.ps(ctx.cookie(SESSION_COOKIE));
+        batch.query(sql);
+        return batch.finish();
+    }
+    ctx.setCookie(SESSION_COOKIE, String(""), 0l);
+    return ctx.redirect(String("/?notice=signedout"));
+}
+
+#[test]
+f<bool> testSafeReturnPath() {
+    assert safeReturnPath(String("/dashboard/packages/new")) == "/dashboard/packages/new";
+    assert safeReturnPath(String("//evil.example")) == "/dashboard";
+    assert safeReturnPath(String("https://evil.example")) == "/dashboard";
+    assert safeReturnPath(String("/auth/github")) == "/dashboard";
+    assert safeReturnPath(String("")) == "/dashboard";
+    return true;
+}
