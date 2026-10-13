@@ -18,7 +18,7 @@
     <div class="columns-2">
         <section class="panel">
             <h2>Top packages (30 days)</h2>
-            <table class="table">
+            <div class="table-wrap"><table class="table">
                 <thead><tr><th>Package</th><th class="num">Downloads</th><th class="num">Views</th><th class="num">All time</th></tr></thead>
                 <tbody>
                     {% for row in top %}
@@ -30,7 +30,7 @@
                     <tr><td colspan="4" class="muted">No packages yet.</td></tr>
                     {% endfor %}
                 </tbody>
-            </table>
+            </table></div>
         </section>
         <div>
             <section class="panel">
