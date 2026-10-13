@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{{ title }} · {{ site_name }}</title>
+<meta name="description" content="{{ description }}">
+<link rel="icon" href="/static/favicon.ico" sizes="96x96">
+<link rel="icon" href="/static/favicon-32x32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="/static/favicon-16x16.png" type="image/png" sizes="16x16">
+<link rel="stylesheet" href="/static/style.css">
+<link rel="search" type="application/opensearchdescription+xml" title="Spice Rack" href="/opensearch.xml">
+<script src="/static/local-time.js" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+{% include "partials/header" %}
+{% include "partials/notice" %}
+<main id="main">{% include page %}</main>
+{% include "partials/footer" %}
+</body>
+</html>

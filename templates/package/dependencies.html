@@ -1,0 +1,29 @@
+<section class="panel">
+    <h2>Dependency tree</h2>
+    {% if not pkg.latest_version %}
+    <p class="muted">This package has no release yet, so there are no dependencies to show.</p>
+    {% elif not direct %}
+    <p class="muted">Version {{ pkg.latest_version }} has no dependencies.</p>
+    {% else %}
+    <p class="muted">Dependencies of <strong>v{{ pkg.latest_version }}</strong>, resolved against the latest versions on this registry. Click a package to open it; expand a row to see what it needs in turn.</p>
+    {% if tree %}{% include "partials/dep-tree" with nodes=tree %}{% endif %}
+    {% if has_dev %}
+    <h3>Development dependencies</h3>
+    <ul class="plain-list">
+        {% for d in direct %}
+        {% if d.dev %}<li><a href="/packages/{{ d.dep_name|url }}">{{ d.dep_name }}</a> <code class="dep-constraint">{{ d.constraint_text }}</code></li>{% endif %}
+        {% endfor %}
+    </ul>
+    {% endif %}
+    {% endif %}
+</section>
+<section class="panel">
+    <h2>Used by</h2>
+    {% if dependents %}
+    <ul class="tags">
+        {% for d in dependents %}<li><a class="tag" href="/packages/{{ d.name|url }}">{{ d.name }}</a></li>{% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted">No other package on the registry depends on {{ name }} yet.</p>
+    {% endif %}
+</section>

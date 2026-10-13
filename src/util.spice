@@ -317,6 +317,14 @@ public f<String> fmtDateTime(const String& timestamp) {
 }
 
 /**
+ * "2026-10-12 19:43:11" -> "2026-10-12T19:43:11Z" for the datetime attribute of <time>. Anything else is returned unchanged.
+ */
+public f<String> fmtIsoUtc(const String& timestamp) {
+    if timestamp.getLength() < 19l || timestamp[10l] != ' ' { return timestamp; }
+    return timestamp.getSubstring(0l, 10l) + "T" + timestamp.getSubstring(11l, 8l) + "Z";
+}
+
+/**
  * Day-of-month part of a "YYYY-MM-DD" date, as short label for chart axes: "12 Oct"
  */
 public f<String> fmtDayShort(const String& date) {

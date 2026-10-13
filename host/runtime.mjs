@@ -8,8 +8,14 @@ const decoder = new TextDecoder();
  *
  * The module is stateless: every call gets the complete input as JSON, the memory arena is reset before it, and the answer
  * is JSON again. All calls are synchronous, so a single instance can serve all requests.
+ *
+ * The templates are copied into the module's memory once, right behind the static data. The arena that is reset before
+ * each call starts after them, so they survive.
+ *
+ * @param {string} wasmPath
+ * @param {Buffer} templates  see templates.mjs
  */
-export async function loadRuntime(wasmPath) {
+export async function loadRuntime(wasmPath, templates) {
   const bytes = await readFile(wasmPath);
   const module = await WebAssembly.compile(bytes);
 
@@ -31,6 +37,15 @@ export async function loadRuntime(wasmPath) {
   memory = exports.memory;
   const heapBase = exports.__heap_base.value;
 
+  // Templates
+  const templatesAddress = (heapBase + 15) & ~15;
+  const arenaStart = (templatesAddress + templates.length + 15) & ~15;
+  if (arenaStart + 1024 * 1024 > memory.buffer.byteLength) throw new Error('templates do not fit into the wasm memory');
+  new Uint8Array(memory.buffer, templatesAddress, templates.length).set(templates);
+  exports.rackSetTemplates(templatesAddress, templates.length);
+
+  const readOutput = (outPtr) => decoder.decode(new Uint8Array(memory.buffer, outPtr, exports.rackOutLength()));
+
   return {
     /** Memory consumption of the last call in bytes, for diagnostics */
     lastUsage: 0,
@@ -42,16 +57,21 @@ export async function loadRuntime(wasmPath) {
      */
     step(envelope) {
       const input = encoder.encode(JSON.stringify(envelope));
-      exports.rackArenaReset(heapBase, memory.buffer.byteLength);
+      exports.rackArenaReset(arenaStart, memory.buffer.byteLength);
       const ptr = exports.rackAlloc(input.length + 1);
       const target = new Uint8Array(memory.buffer, ptr, input.length + 1);
       target.set(input);
       target[input.length] = 0;
       const outPtr = exports.rackStep(ptr, input.length);
-      const outLen = exports.rackOutLength();
+      const text = readOutput(outPtr);
       this.lastUsage = exports.rackArenaUsed();
-      const text = decoder.decode(new Uint8Array(memory.buffer, outPtr, outLen));
       return JSON.parse(text);
+    },
+
+    /** Syntax problems of the templates, one per line; empty if they are fine */
+    templateErrors() {
+      exports.rackArenaReset(arenaStart, memory.buffer.byteLength);
+      return readOutput(exports.rackTemplateErrors()).trim();
     },
   };
 }

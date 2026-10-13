@@ -3,6 +3,7 @@ import "./util";
 import "./json";
 import "./core";
 import "./layout";
+import "./template";
 import "./search";
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -10,18 +11,6 @@ import "./search";
 // ---------------------------------------------------------------------------------------------------------------------
 
 const long ADMIN_PAGE_SIZE = 25l;
-
-f<String> adminNav(const String& active) {
-    String h = String("<nav class=\"subnav container\" aria-label=\"Admin\">");
-    h += String("<a class=\"") + (active == "overview" ? "active" : "") + "\" href=\"/admin\">Overview</a>";
-    h += String("<a class=\"") + (active == "users" ? "active" : "") + "\" href=\"/admin/users\">Maintainers</a>";
-    h += String("<a class=\"") + (active == "packages" ? "active" : "") + "\" href=\"/admin/packages\">Packages</a>";
-    return h + "</nav>";
-}
-
-f<String> tile(const String& value, const String& label) {
-    return String("<div class=\"tile\"><span class=\"tile-value\">") + value + "</span><span class=\"tile-label\">" + esc(label) + "</span></div>";
-}
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Overview
@@ -74,48 +63,20 @@ public f<String> handleAdminHome(Ctx& ctx) {
         signupValues.pushBack(day.getNum("signups"));
     }
 
-    String h = String("<div class=\"page-title\"><div class=\"container\"><h1>Administration</h1><p class=\"muted\">Usage of the registry at a glance.</p></div></div>");
-    h += adminNav(String("overview")) + "<div class=\"container section\"><div class=\"tiles\">";
-    h += tile(fmtThousands(t.getNum("packages")), String("Packages")) + tile(fmtThousands(t.getNum("versions")), String("Versions"));
-    h += tile(fmtThousands(t.getNum("users")), String("Maintainer accounts")) + tile(fmtThousands(t.getNum("downloads")), String("Downloads, all time"));
-    h += tile(fmtThousands(t.getNum("downloads_30d")), String("Downloads, 30 days")) + tile(fmtThousands(t.getNum("views_30d")), String("Page views, 30 days"));
-    h += tile(fmtThousands(t.getNum("admins")), String("Administrators")) + tile(fmtThousands(t.getNum("suspended")), String("Suspended accounts"));
-    h += tile(fmtThousands(t.getNum("stale")), String("Packages not synced for 2 days")) + "</div>";
-
-    h += "<section class=\"panel\">" + barChart(String("Downloads per day (all packages)"), labels, downloads, String("downloads")) + "</section>";
-    h += "<section class=\"panel\">" + barChart(String("Page views per day (all packages)"), labels, views, String("views")) + "</section>";
-    h += "<section class=\"panel\">" + barChart(String("New maintainer accounts per day"), signupLabels, signupValues, String("sign-ups")) + "</section>";
-
-    h += "<div class=\"columns-2\"><section class=\"panel\"><h2>Top packages (30 days)</h2><table class=\"table\"><thead><tr><th>Package</th><th class=\"num\">Downloads</th><th class=\"num\">Views</th><th class=\"num\">All time</th></tr></thead><tbody>";
-    for JV row = top.first(); row.exists(); row = row.after() {
-        h += "<tr><td><a href=\"/packages/" + urlEncode(row.getStr("name")) + "\">" + esc(row.getStr("name")) + "</a></td><td class=\"num\">" + fmtThousands(row.getNum("d30")) + "</td>";
-        h += "<td class=\"num\">" + fmtThousands(row.getNum("v30")) + "</td><td class=\"num\">" + fmtThousands(row.getNum("downloads_total")) + "</td></tr>";
-    }
-    if top.size() == 0l { h += "<tr><td colspan=\"4\" class=\"muted\">No packages yet.</td></tr>"; }
-    h += "</tbody></table></section><div>";
-    h += "<section class=\"panel\"><h2>Newest maintainers</h2><ul class=\"plain-list\">";
-    for JV row = recentUsers.first(); row.exists(); row = row.after() {
-        h += "<li><strong>" + esc(row.getStr("login")) + "</strong> <span class=\"muted\">" + esc(row.getStr("role")) + " &middot; joined " + fmtDate(row.getStr("created_at")) + "</span></li>";
-    }
-    h += "</ul><p><a href=\"/admin/users\">Manage maintainers &rarr;</a></p></section>";
-    h += "<section class=\"panel\"><h2>Newest packages</h2><ul class=\"plain-list\">";
-    for JV row = recentPackages.first(); row.exists(); row = row.after() {
-        h += "<li><a href=\"/admin/packages/" + urlEncode(row.getStr("name")) + "\">" + esc(row.getStr("name")) + "</a> <span class=\"muted\">by " + esc(row.getStr("owner_login")) + " &middot; " + fmtDate(row.getStr("created_at")) + "</span></li>";
-    }
-    h += "</ul><p><a href=\"/admin/packages\">Manage packages &rarr;</a></p></section></div></div></div>";
-    return ctx.html(200, layoutPage(ctx, String("Administration"), String("Registry administration"), h));
+    View view;
+    view.bind("totals", t);
+    view.bind("top", top);
+    view.bind("recent_users", recentUsers);
+    view.bind("recent_packages", recentPackages);
+    view.json("downloads_chart", chartJson(String("Downloads per day (all packages)"), labels, downloads, String("downloads")));
+    view.json("views_chart", chartJson(String("Page views per day (all packages)"), labels, views, String("views")));
+    view.json("signups_chart", chartJson(String("New maintainer accounts per day"), signupLabels, signupValues, String("sign-ups")));
+    return ctx.html(200, renderPage(ctx, "admin/overview", String("Administration"), String("Registry administration"), view));
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Users
 // ---------------------------------------------------------------------------------------------------------------------
-
-f<String> smallForm(const Ctx& ctx, const String& action, const String& field, const String& value, const String& label, const String& cls, const String& confirmText = String("")) {
-    String h = String("<form class=\"inline-form\" method=\"post\" action=\"") + action + "\">" + csrfField(ctx);
-    h += "<input type=\"hidden\" name=\"" + field + "\" value=\"" + esc(value) + "\">";
-    if !confirmText.isEmpty() { h += "<input type=\"hidden\" name=\"confirm\" value=\"yes\">"; }
-    return h + "<button class=\"btn btn-small " + cls + "\" type=\"submit\">" + esc(label) + "</button></form>";
-}
 
 public f<String> handleAdminUsers(Ctx& ctx) {
     if !ctx.user.present { return requireLogin(ctx); }
@@ -143,36 +104,12 @@ public f<String> handleAdminUsers(Ctx& ctx) {
     const long total = countRow.getNum("total");
     JV users = ctx.rows(0, 1l);
 
-    String h = String("<div class=\"page-title\"><div class=\"container\"><h1>Maintainers</h1><p class=\"muted\">") + fmtThousands(total) + " accounts</p></div></div>";
-    h += adminNav(String("users")) + "<div class=\"container section\">";
-    h += "<form class=\"toolbar\" method=\"get\" action=\"/admin/users\"><label class=\"sr-only\" for=\"uq\">Search</label><input id=\"uq\" type=\"search\" name=\"q\" value=\"" + esc(q) + "\" placeholder=\"Search by login or name\"><button class=\"btn\" type=\"submit\">Search</button></form>";
-    h += "<div class=\"table-wrap\"><table class=\"table\"><thead><tr><th>Account</th><th>Role</th><th>Status</th><th class=\"num\">Packages</th><th>Joined</th><th>Last sign-in</th><th>Actions</th></tr></thead><tbody>";
-    for JV u = users.first(); u.exists(); u = u.after() {
-        const long id = u.getNum("id");
-        const String login = u.getStr("login");
-        const bool self = id == ctx.user.id;
-        const bool isAdmin = u.getStr("role") == "admin";
-        const bool suspended = u.getStr("status") == "suspended";
-        const String base = String("/admin/users/") + fmtLong(id);
-        h += "<tr><td><img class=\"avatar\" src=\"" + esc(avatarUrl(login)) + "\" alt=\"\" width=\"24\" height=\"24\"> <a href=\"/packages?owner=" + urlEncode(login) + "\"><strong>" + esc(login) + "</strong></a>";
-        h += "<div class=\"muted small\">" + esc(u.getStr("display_name")) + "</div></td>";
-        h += "<td><span class=\"badge " + String(isAdmin ? "badge-ok" : "") + "\">" + esc(u.getStr("role")) + "</span></td>";
-        h += "<td><span class=\"badge " + String(suspended ? "badge-warn" : "") + "\">" + esc(u.getStr("status")) + "</span></td>";
-        h += "<td class=\"num\">" + fmtLong(u.getNum("packages")) + "</td><td>" + fmtDate(u.getStr("created_at")) + "</td><td>" + fmtDate(u.getStr("last_login_at")) + "</td><td class=\"actions\">";
-        if self {
-            h += "<span class=\"muted small\">this is you</span>";
-        } else {
-            h += smallForm(ctx, base + "/role", String("role"), isAdmin ? String("maintainer") : String("admin"), isAdmin ? String("Make maintainer") : String("Make admin"), String(""));
-            h += smallForm(ctx, base + "/status", String("status"), suspended ? String("active") : String("suspended"), suspended ? String("Reactivate") : String("Suspend"), String(""));
-            h += smallForm(ctx, base + "/delete", String("confirm"), String("yes"), String("Delete"), String("btn-danger"), String("yes"));
-        }
-        h += "</td></tr>";
-    }
-    if users.size() == 0l { h += "<tr><td colspan=\"7\" class=\"muted\">No accounts found.</td></tr>"; }
-    h += "</tbody></table></div>";
-    h += pagination(String("/admin/users"), q.isEmpty() ? String("") : String("q=") + urlEncode(q), page, pageCount(total, ADMIN_PAGE_SIZE));
-    h += "<p class=\"muted small\">Suspending an account signs the user out and blocks new sign-ins; their packages stay online. Deleting an account also deletes all of its packages.</p></div>";
-    return ctx.html(200, layoutPage(ctx, String("Maintainers"), String("Manage maintainer accounts"), h));
+    View view;
+    view.text("q", q);
+    view.text("total", fmtLong(total));
+    view.bind("users", users);
+    view.json("pager", paginationJson(String("/admin/users"), q.isEmpty() ? String("") : String("q=") + urlEncode(q), page, pageCount(total, ADMIN_PAGE_SIZE)));
+    return ctx.html(200, renderPage(ctx, "admin/users", String("Maintainers"), String("Manage maintainer accounts"), view));
 }
 
 /**
@@ -265,24 +202,10 @@ public f<String> handleAdminPackages(Ctx& ctx) {
     const long total = countRow.getNum("total");
     JV packages = ctx.rows(0, 1l);
 
-    String h = String("<div class=\"page-title\"><div class=\"container title-flex\"><div><h1>Packages</h1><p class=\"muted\">") + fmtThousands(total) + " packages</p></div>";
-    h += "<a class=\"btn btn-primary\" href=\"/admin/packages/new\">New package</a></div></div>";
-    h += adminNav(String("packages")) + "<div class=\"container section\">";
-    h += "<form class=\"toolbar\" method=\"get\" action=\"/admin/packages\"><label class=\"sr-only\" for=\"pq\">Search</label><input id=\"pq\" type=\"search\" name=\"q\" value=\"" + esc(q) + "\" placeholder=\"Search by name, maintainer or repository\"><button class=\"btn\" type=\"submit\">Search</button></form>";
-    h += "<div class=\"table-wrap\"><table class=\"table\"><thead><tr><th>Package</th><th>Maintainer</th><th>Repository</th><th>Latest</th><th class=\"num\">Downloads</th><th>Last sync</th><th></th></tr></thead><tbody>";
-    for JV pk = packages.first(); pk.exists(); pk = pk.after() {
-        const String name = pk.getStr("name");
-        const String version = pk.getStr("latest_version");
-        const String synced = pk.getStr("synced_at");
-        h += "<tr><td><a href=\"/packages/" + urlEncode(name) + "\"><strong>" + esc(name) + "</strong></a></td><td>" + esc(pk.getStr("owner_login")) + "</td>";
-        h += "<td><a href=\"https://github.com/" + esc(urlEncode(pk.getStr("repo_owner"))) + "/" + esc(urlEncode(pk.getStr("repo_name"))) + "\" rel=\"noopener\">" + esc(pk.getStr("repo_owner")) + "/" + esc(pk.getStr("repo_name")) + "</a></td>";
-        h += "<td>" + (version.isEmpty() ? String("&ndash;") : "v" + esc(version)) + "</td><td class=\"num\">" + fmtThousands(pk.getNum("downloads_total")) + "</td>";
-        h += "<td>" + (synced.isEmpty() ? String("never") : fmtDate(synced)) + "</td>";
-        h += "<td class=\"actions\"><a class=\"btn btn-small\" href=\"/admin/packages/" + urlEncode(name) + "\">Edit</a></td></tr>";
-    }
-    if packages.size() == 0l { h += "<tr><td colspan=\"7\" class=\"muted\">No packages found.</td></tr>"; }
-    h += "</tbody></table></div>";
-    h += pagination(String("/admin/packages"), q.isEmpty() ? String("") : String("q=") + urlEncode(q), page, pageCount(total, ADMIN_PAGE_SIZE));
-    h += "</div>";
-    return ctx.html(200, layoutPage(ctx, String("Packages"), String("Manage packages"), h));
+    View view;
+    view.text("q", q);
+    view.text("total", fmtLong(total));
+    view.bind("packages", packages);
+    view.json("pager", paginationJson(String("/admin/packages"), q.isEmpty() ? String("") : String("q=") + urlEncode(q), page, pageCount(total, ADMIN_PAGE_SIZE)));
+    return ctx.html(200, renderPage(ctx, "admin/packages", String("Packages"), String("Manage packages"), view));
 }

@@ -123,7 +123,9 @@ function client(baseUrl) {
       if (value === '' || /Max-Age=0/i.test(cookie)) jar.delete(name);
       else jar.set(name, value);
     }
-    return { status: res.status, location: res.headers.get('location'), headers: res.headers, text: await res.text() };
+    const text = await res.text();
+    assert.ok(!text.includes('<!-- template error'), `template error in ${method} ${pathname}: ${text.slice(text.indexOf('<!-- template error'))}`);
+    return { status: res.status, location: res.headers.get('location'), headers: res.headers, text };
   }
   return {
     get: (p) => request('GET', p),
@@ -156,6 +158,7 @@ describe('Spice Rack', { skip }, () => {
       trustProxy: false,
       wasmPath: path.join(here, '..', '..', 'build', 'rack.wasm'),
       publicDir: path.join(here, '..', '..', 'public'),
+      templatesDir: path.join(here, '..', '..', 'templates'),
       migrationsDir: path.join(here, '..', '..', 'db', 'migrations'),
       syncIntervalMinutes: 15,
       maxBodyBytes: 256 * 1024,
@@ -193,7 +196,11 @@ describe('Spice Rack', { skip }, () => {
     const home = await anon.get('/');
     assert.equal(home.status, 200);
     has(home.text, /Find and share/);
-    has(home.headers.get('content-security-policy'), /default-src 'none'/);
+    has(home.headers.get('content-security-policy'), /default-src 'none'; script-src 'self'/);
+    has(home.text, /<script src="\/static\/local-time.js" defer><\/script>/);
+    const script = await anon.get('/static/local-time.js');
+    assert.equal(script.status, 200);
+    has(script.headers.get('content-type'), /text\/javascript/);
     const css = await anon.get('/static/style.css');
     assert.equal(css.status, 200);
     has(css.text, /--accent/);
@@ -381,6 +388,7 @@ describe('Spice Rack', { skip }, () => {
   it('lets maintainers manage their packages', async () => {
     const manage = await admin.get('/dashboard/packages/json-parser');
     assert.equal(manage.status, 200);
+    has(manage.text, /Last sync: <time class="local-time" datetime="\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ">\d+ \w{3} \d{4}, \d\d:\d\d UTC<\/time>\./);
     const csrf = admin.csrf(manage.text);
     const saved = await admin.post('/dashboard/packages/json-parser', {
       csrf, action: 'save', description: 'A very fast JSON parser', homepage: 'https://json.example', tags: 'json, fast',
@@ -402,6 +410,36 @@ describe('Spice Rack', { skip }, () => {
     const dash = await admin.get('/dashboard');
     has(dash.text, /json-parser/);
     has(dash.text, /Downloads of your packages/);
+  });
+
+  it('escapes user-supplied text in the templates', async () => {
+    const evil = '<script>alert(1)</script> & "quotes" \'single\'';
+    const escaped = '&lt;script&gt;alert(1)&lt;/script&gt; &amp; &quot;quotes&quot; &#39;single&#39;';
+    const csrf = admin.csrf((await admin.get('/dashboard/packages/json-parser')).text);
+    const save = (description, homepage = '') =>
+      admin.post('/dashboard/packages/json-parser', { csrf, action: 'save', description, homepage, tags: 'json, fast' });
+
+    assert.equal((await save(evil)).status, 303);
+    for (const url of ['/', '/packages?q=json', '/packages/json-parser', '/packages/json-parser?tab=stats', '/dashboard', '/admin/packages?q=json']) {
+      const page = await admin.get(url);
+      assert.equal(page.status, 200, url);
+      lacks(page.text, /<script>alert/);
+      if (url !== '/dashboard' && url !== '/admin/packages?q=json') has(page.text, new RegExp(escaped.replace(/[()]/g, '\\$&')));
+    }
+
+    // The form shows what was typed after a failed save, inside an attribute
+    const rejected = await save('"><script>alert(2)</script>', 'javascript:alert(3)');
+    assert.equal(rejected.status, 400);
+    lacks(rejected.text, /<script>alert/);
+    has(rejected.text, /value="&quot;&gt;&lt;script&gt;alert\(2\)&lt;\/script&gt;"/);
+
+    // Search terms and filters are echoed escaped as well
+    const search = await anon.get('/packages?q=' + encodeURIComponent('<b>x</b>') + '&owner=' + encodeURIComponent('"><i>'));
+    assert.equal(search.status, 200);
+    lacks(search.text, /<b>x<\/b>|"><i>/);
+    has(search.text, /&lt;b&gt;x&lt;\/b&gt;/);
+
+    assert.equal((await save('A very fast JSON parser', 'https://json.example')).status, 303);
   });
 
   it('keeps maintainers out of other people\'s packages and the admin area', async () => {

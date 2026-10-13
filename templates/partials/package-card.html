@@ -1,0 +1,11 @@
+<li class="card package-card">
+    <div class="card-head"><h3><a href="/packages/{{ pkg.name|url }}">{{ pkg.name }}</a>{% if pkg.latest_version %} <span class="version">v{{ pkg.latest_version }}</span>{% endif %}</h3></div>
+    <p class="card-desc">{{ pkg.description }}</p>
+    {% include "partials/tags" with tags=pkg.tags %}
+    <div class="card-meta">
+        {% include "partials/stat" with icon="icons/download" value=pkg.downloads_total|count label="Total downloads" %}
+        {% include "partials/stat" with icon="icons/star" value=pkg.stars|count label="GitHub stars" %}
+        <span class="stat" title="Maintainer">{% include "icons/user" %}<a href="/packages?owner={{ pkg.owner_login|url }}">{{ pkg.owner_login }}</a></span>
+        {% include "partials/stat" with icon="icons/clock" value=pkg.updated_at|date label="Last updated" %}
+    </div>
+</li>

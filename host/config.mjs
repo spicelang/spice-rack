@@ -17,6 +17,7 @@ export const config = {
   trustProxy: env.TRUST_PROXY === '1' || env.TRUST_PROXY === 'true',
   wasmPath: env.WASM_PATH || path.join(here, '..', 'build', 'rack.wasm'),
   publicDir: env.PUBLIC_DIR || path.join(here, '..', 'public'),
+  templatesDir: env.TEMPLATES_DIR || path.join(here, '..', 'templates'),
   migrationsDir: env.MIGRATIONS_DIR || path.join(here, '..', 'db', 'migrations'),
   syncIntervalMinutes: int('SYNC_INTERVAL_MINUTES', 15),
   maxBodyBytes: 256 * 1024,

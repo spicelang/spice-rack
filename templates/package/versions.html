@@ -1,0 +1,27 @@
+{% if versions %}
+<ol class="versions">
+    {% for v in versions %}
+    <li class="version-item" id="v{{ v.version }}">
+        <div class="version-head">
+            <h3>v{{ v.version }}</h3>
+            {% if v.prerelease %}<span class="badge badge-warn">pre-release</span>{% endif %}
+            {% if v.version == pkg.latest_version %}<span class="badge badge-ok">latest</span>{% endif %}
+            <span class="muted">{{ v.published_at|date }}</span>
+            <span class="spacer"></span>
+            {% include "partials/stat" with icon="icons/download" value=v.downloads|thousands label="Downloads of this version" %}
+            <a class="btn btn-small" href="/api/v1/packages/{{ pkg.name|url }}/versions/{{ v.version|url }}/download">Download</a>
+        </div>
+        {% if v.title and v.title != v.version|prefix:"v" and v.title != v.version %}<p class="version-title">{{ v.title }}</p>{% endif %}
+        {% if v.changelog_html %}
+        <details class="changelog"{% if loop.first %} open{% endif %}><summary>Changelog</summary><div class="markdown-body">{{{ v.changelog_html }}}</div></details>
+        {% elif v.changelog %}
+        <details class="changelog"{% if loop.first %} open{% endif %}><summary>Changelog</summary><pre>{{ v.changelog }}</pre></details>
+        {% else %}
+        <p class="muted">No release notes.</p>
+        {% endif %}
+    </li>
+    {% endfor %}
+</ol>
+{% else %}
+<div class="empty"><p><strong>No releases yet.</strong></p><p class="muted">Publish a GitHub release with a semantic version tag (for example <code>v1.0.0</code>) to make this package installable.</p></div>
+{% endif %}

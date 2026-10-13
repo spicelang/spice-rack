@@ -1,0 +1,7 @@
+{% if pager.show %}
+<nav class="pagination" aria-label="Pagination">
+    {% if pager.prev %}<a class="btn btn-ghost" rel="prev" href="{{ pager.prev }}">&larr; Previous</a>{% endif %}
+    <span class="muted">Page {{ pager.page }} of {{ pager.pages }}</span>
+    {% if pager.next %}<a class="btn btn-ghost" rel="next" href="{{ pager.next }}">Next &rarr;</a>{% endif %}
+</nav>
+{% endif %}

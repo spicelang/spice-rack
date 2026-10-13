@@ -1,0 +1,36 @@
+<div class="page-title"><div class="container title-flex">
+    <div><h1>Manage {{ pkg.name }}</h1><p class="muted">Maintained by {{ pkg.owner_login }} &middot; repository {{ pkg.repo_owner }}/{{ pkg.repo_name }}</p></div>
+    <a class="btn" href="/packages/{{ pkg.name|url }}">View public page</a>
+</div></div>
+<div class="container narrow section">
+    {% include "partials/errors" %}
+    <form class="form panel" method="post" action="{{ base }}">
+        {% include "partials/csrf" %}<input type="hidden" name="action" value="save">
+        <h2>Details</h2>
+        {% if admin_mode %}
+        {% include "partials/field" with label="Package name" name="name" value=form.name hint="Renaming breaks existing references to the package." required="yes" %}
+        {% include "partials/field" with label="Repository" name="repo" value=form.repo hint="owner/name" required="yes" %}
+        {% include "partials/field" with label="Maintainer (GitHub login)" name="maintainer" value=form.maintainer required="yes" %}
+        {% else %}
+        {% include "partials/field" with label="Package name" name="name" value=pkg.name hint="The name cannot be changed. Ask an administrator if you need a different one." readonly="yes" %}
+        {% endif %}
+        {% include "partials/field" with label="Description" name="description" value=form.description hint="One short sentence." %}
+        {% include "partials/field" with label="Tags" name="tags" value=form.tags hint="Comma separated, up to 8." %}
+        {% include "partials/field" with label="Homepage" name="homepage" value=form.homepage hint="Optional http(s) URL." %}
+        <div class="form-actions"><button class="btn btn-primary" type="submit">Save changes</button></div>
+    </form>
+    <section class="panel">
+        <h2>Sync with GitHub</h2>
+        <p class="muted">README, releases and dependencies are refreshed automatically. Use this after publishing a release. Last sync: {% if pkg.synced_at %}<time class="local-time" datetime="{{ pkg.synced_at|isoutc }}">{{ pkg.synced_at|datetime }}</time>{% else %}never{% endif %}.</p>
+        <form method="post" action="{{ base }}">{% include "partials/csrf" %}<input type="hidden" name="action" value="sync"><button class="btn" type="submit">Sync now</button></form>
+    </section>
+    <section class="panel danger-zone">
+        <h2>Delete package</h2>
+        <p class="muted">This removes the package, all of its versions and its statistics from the registry. Your GitHub repository is not touched. This cannot be undone.</p>
+        <form class="form" method="post" action="{{ base }}">
+            {% include "partials/csrf" %}<input type="hidden" name="action" value="delete">
+            {% include "partials/field" with label="Type the package name to confirm" name="confirm" value="" required="yes" placeholder=pkg.name %}
+            <div class="form-actions"><button class="btn btn-danger" type="submit">Delete this package</button></div>
+        </form>
+    </section>
+</div>

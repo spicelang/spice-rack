@@ -3,6 +3,7 @@ import "./util";
 import "./json";
 import "./semver";
 import "./core";
+import "./template";
 import "./layout";
 import "./github";
 import "./search";

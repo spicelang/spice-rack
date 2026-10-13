@@ -11,6 +11,7 @@ import "./dashboard";
 import "./admin";
 import "./api";
 import "./tasks";
+import "./template";
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Entry points of the wasm module and the request router.
@@ -20,6 +21,8 @@ import "./tasks";
 //   rackAlloc(size)                        reserve a buffer for the input
 //   rackStep(ptr, len)                     process the input JSON; returns a pointer to the output JSON
 //   rackOutLength()                        byte length of that output
+//   rackSetTemplates(ptr, size)            where the host put the templates (once, at startup; see template.spice)
+//   rackTemplateErrors()                   syntax problems of the templates, for the startup check
 // ---------------------------------------------------------------------------------------------------------------------
 
 long OUT_LENGTH = 0l;
@@ -178,6 +181,17 @@ public f<unsigned int> rackStep(unsigned int ptr, unsigned int len) {
     String output = handleEnvelope(input);
     OUT_LENGTH = cast<long>(output.getLength());
     unsafe { return cast<unsigned int>(cast<unsigned long>(output.getRaw())); }
+}
+
+/**
+ * Problems of the templates the host provided, one per line (empty if they are fine). Used for the check at startup.
+ */
+#[core.compiler.mangle = false]
+public f<unsigned int> rackTemplateErrors() {
+    TemplateSet set = loadHostTemplates();
+    String report = set.errors();
+    OUT_LENGTH = cast<long>(report.getLength());
+    unsafe { return cast<unsigned int>(cast<unsigned long>(report.getRaw())); }
 }
 
 #[core.compiler.mangle = false]

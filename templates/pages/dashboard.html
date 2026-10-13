@@ -1,0 +1,37 @@
+<div class="page-title"><div class="container title-flex">
+    <div><h1>Dashboard</h1><p class="muted">Signed in as <strong>{{ user.login }}</strong> &middot; {{ user.role }}</p></div>
+    <a class="btn btn-primary" href="/dashboard/packages/new">New package</a>
+</div></div>
+<div class="container section">
+    <div class="tiles">
+        {% include "partials/tile" with value=package_count|thousands label="Packages" %}
+        {% include "partials/tile" with value=downloads_total|thousands label="Downloads, all time" %}
+        {% include "partials/tile" with value=downloads_30d|thousands label="Downloads, last 30 days" %}
+    </div>
+    {% if packages %}
+    <section class="panel">{% include "partials/bar-chart" with chart=chart %}</section>
+    <section class="panel">
+        <h2>Your packages</h2>
+        <div class="table-wrap"><table class="table">
+            <thead><tr><th>Package</th><th>Latest</th><th class="num">Downloads</th><th class="num">30 days</th><th class="num">Views (30d)</th><th>Last sync</th><th></th></tr></thead>
+            <tbody>
+                {% for pk in packages %}
+                <tr>
+                    <td><a href="/packages/{{ pk.name|url }}"><strong>{{ pk.name }}</strong></a><div class="muted small">{{ pk.description }}</div></td>
+                    <td>{% if pk.latest_version %}v{{ pk.latest_version }}{% else %}&ndash;{% endif %}</td>
+                    <td class="num">{{ pk.downloads_total|thousands }}</td><td class="num">{{ pk.d30|thousands }}</td><td class="num">{{ pk.v30|thousands }}</td>
+                    <td>{% if pk.synced_at %}{{ pk.synced_at|date }}{% else %}never{% endif %}</td>
+                    <td class="actions"><a class="btn btn-small" href="/dashboard/packages/{{ pk.name|url }}">Manage</a></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table></div>
+    </section>
+    {% else %}
+    <div class="empty">
+        <p><strong>You have not published a package yet.</strong></p>
+        <p class="muted">Tag a release on GitHub, then add the repository to the registry.</p>
+        <p><a class="btn btn-primary" href="/dashboard/packages/new">Create your first package</a> <a class="btn" href="/docs/publishing">Publishing guide</a></p>
+    </div>
+    {% endif %}
+</div>

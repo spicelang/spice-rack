@@ -1,0 +1,13 @@
+<figure class="chart">
+    <figcaption>{{ chart.title }}<span class="muted"> &mdash; {{ chart.total }} in total</span></figcaption>
+    <svg viewBox="{{ chart.viewBox }}" role="img" aria-label="{{ chart.title }}" preserveAspectRatio="xMidYMid meet">
+        {% for g in chart.grid %}
+        <line class="grid" x1="{{ g.x1 }}" x2="{{ g.x2 }}" y1="{{ g.y }}" y2="{{ g.y }}"/>
+        <text class="axis" x="{{ g.labelX }}" y="{{ g.labelY }}" text-anchor="end">{{ g.label }}</text>
+        {% endfor %}
+        {% for b in chart.bars %}
+        <rect class="bar" x="{{ b.x }}" y="{{ b.y }}" width="{{ b.width }}" height="{{ b.height }}" rx="2"><title>{{ b.tip }}</title></rect>
+        {% if b.axis %}<text class="axis" x="{{ b.axisX }}" y="{{ b.axisY }}" text-anchor="middle">{{ b.axis }}</text>{% endif %}
+        {% endfor %}
+    </svg>
+</figure>

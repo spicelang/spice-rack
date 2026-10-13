@@ -1,0 +1,23 @@
+<header class="site-header"><div class="container header-inner">
+    <a class="brand" href="/">{% include "partials/brand-mark" %}<span>{{ site_name }}</span></a>
+    <form class="header-search" action="/packages" method="get" role="search">
+        <label class="sr-only" for="header-q">Search packages</label>
+        {% include "icons/search" %}<input id="header-q" type="search" name="q" placeholder="Search packages" autocomplete="off">
+    </form>
+    <nav class="main-nav" aria-label="Main">
+        <a class="nav-link{% if nav.packages %} active{% endif %}" href="/packages">Packages</a>
+        <a class="nav-link{% if nav.docs %} active{% endif %}" href="/docs/publishing">Publish</a>
+        {% if user.present %}
+        <a class="nav-link{% if nav.dashboard %} active{% endif %}" href="/dashboard">Dashboard</a>
+        {% if user.admin %}<a class="nav-link{% if nav.admin %} active{% endif %}" href="/admin">Admin</a>{% endif %}
+        <form class="inline-form user-menu" action="/logout" method="post">
+            {% include "partials/csrf" %}
+            {% include "partials/avatar" with login=user.login size="28" %}
+            <span class="user-login">{{ user.login }}</span>
+            <button class="btn btn-ghost btn-small" type="submit">Sign out</button>
+        </form>
+        {% else %}
+        <a class="btn btn-primary btn-small" href="/auth/github">{% include "icons/github" %}Sign in</a>
+        {% endif %}
+    </nav>
+</div></header>

@@ -1,0 +1,15 @@
+<div class="package-header"><div class="container">
+    <div class="title-row"><h1>{{ name }}</h1>{% if pkg.latest_version %}<span class="version big">v{{ pkg.latest_version }}</span>{% endif %}</div>
+    <p class="lead">{{ pkg.description }}</p>
+    {% include "partials/tags" with tags=pkg.tags %}
+    <nav class="tabs" aria-label="Package sections">
+        <a class="tab{% if tab == "readme" %} active{% endif %}" href="/packages/{{ name|url }}"{% if tab == "readme" %} aria-current="page"{% endif %}>Readme</a>
+        <a class="tab{% if tab == "versions" %} active{% endif %}" href="/packages/{{ name|url }}?tab=versions"{% if tab == "versions" %} aria-current="page"{% endif %}>Versions</a>
+        <a class="tab{% if tab == "dependencies" %} active{% endif %}" href="/packages/{{ name|url }}?tab=dependencies"{% if tab == "dependencies" %} aria-current="page"{% endif %}>Dependencies</a>
+        <a class="tab{% if tab == "stats" %} active{% endif %}" href="/packages/{{ name|url }}?tab=stats"{% if tab == "stats" %} aria-current="page"{% endif %}>Stats</a>
+    </nav>
+</div></div>
+<div class="container package-layout">
+    <div class="package-main">{% include tab_page %}</div>
+    {% include "package/sidebar" %}
+</div>

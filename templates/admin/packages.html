@@ -1,0 +1,25 @@
+<div class="page-title"><div class="container title-flex">
+    <div><h1>Packages</h1><p class="muted">{{ total|thousands }} packages</p></div>
+    <a class="btn btn-primary" href="/admin/packages/new">New package</a>
+</div></div>
+{% include "admin/nav" with active="packages" %}
+<div class="container section">
+    <form class="toolbar" method="get" action="/admin/packages"><label class="sr-only" for="pq">Search</label><input id="pq" type="search" name="q" value="{{ q }}" placeholder="Search by name, maintainer or repository"><button class="btn" type="submit">Search</button></form>
+    <div class="table-wrap"><table class="table">
+        <thead><tr><th>Package</th><th>Maintainer</th><th>Repository</th><th>Latest</th><th class="num">Downloads</th><th>Last sync</th><th></th></tr></thead>
+        <tbody>
+            {% for pk in packages %}
+            <tr>
+                <td><a href="/packages/{{ pk.name|url }}"><strong>{{ pk.name }}</strong></a></td><td>{{ pk.owner_login }}</td>
+                <td><a href="https://github.com/{{ pk.repo_owner|url }}/{{ pk.repo_name|url }}" rel="noopener">{{ pk.repo_owner }}/{{ pk.repo_name }}</a></td>
+                <td>{% if pk.latest_version %}v{{ pk.latest_version }}{% else %}&ndash;{% endif %}</td><td class="num">{{ pk.downloads_total|thousands }}</td>
+                <td>{% if pk.synced_at %}{{ pk.synced_at|date }}{% else %}never{% endif %}</td>
+                <td class="actions"><a class="btn btn-small" href="/admin/packages/{{ pk.name|url }}">Edit</a></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="7" class="muted">No packages found.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table></div>
+    {% include "partials/pagination" %}
+</div>

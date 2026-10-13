@@ -1,0 +1,11 @@
+<ul class="dep-tree">
+    {% for n in nodes %}
+    {% if n.more %}
+    <li class="dep-more muted">&hellip; more dependencies not shown</li>
+    {% elif n.children %}
+    <li><details{% if n.open %} open{% endif %}><summary>{% include "partials/dep-label" %}</summary>{% include "partials/dep-tree" with nodes=n.children %}</details></li>
+    {% else %}
+    <li class="dep-leaf">{% include "partials/dep-label" %}</li>
+    {% endif %}
+    {% endfor %}
+</ul>

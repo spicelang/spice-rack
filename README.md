@@ -28,18 +28,54 @@ browser ──HTTP──▶ host/app.mjs ──▶ rackStep(request JSON) ──
 
 The wasm module is a pure function. It receives the request, the configuration and the results of earlier effects, and answers
 with either the next batch of effects (SQL statements with parameters, HTTP calls to GitHub) or the finished response. Routing,
-authentication, authorization, CSRF checks, SQL, JSON, HTML rendering, SVG charts, semver resolution and the GitHub sync are all
-Spice code. The UI is server-rendered HTML + one CSS file, no client-side JavaScript.
+authentication, authorization, CSRF checks, SQL, JSON, HTML rendering, semver resolution and the GitHub sync are all Spice code.
+The markup is not: it lives in `templates/` and is rendered by a small template engine (see [Templates](#templates)). The UI is
+server-rendered HTML + one CSS file; the only script (`public/local-time.js`) shows times of day in the visitor's timezone.
 
 Because WebAssembly has no libc, `src/libc.spice` provides the handful of C functions the Spice runtime needs (a bump allocator
 that is reset for every call, `memcpy`, ...). See `scripts/build-wasm.sh` for why `wasm-ld` is invoked directly.
 
 ```
 src/            Spice sources (main.spice = router and wasm exports, one file per area; unit tests sit next to the code)
+templates/      HTML and XML templates for every page, partial and feed
 host/           Node.js host, MySQL pool, migrations runner, end-to-end tests (host/test), demo seeding (host/dev)
 db/migrations/  MySQL schema
 public/         CSS and favicon
 ```
+
+## Templates
+
+All markup is in `templates/`; the Spice code only prepares data. A handler binds names to values and renders a template inside
+the layout (`templates/layout.html`):
+
+```spice
+View view;
+view.bind("results", rows);                     // database rows are bound as they are
+view.json("pager", paginationJson(...));        // small view models are assembled with a JsonWriter
+view.flag("single", total == 1l);
+return ctx.html(200, renderPage(ctx, "pages/search", title, description, view));
+```
+
+```html
+{% for r in results %}{% include "partials/package-card" with pkg=r %}{% endfor %}
+<p>{{ total|thousands }}{% if single %} package{% else %} packages{% endif %} found</p>
+```
+
+| Syntax | Meaning |
+|---|---|
+| `{{ user.login }}` | value, **HTML-escaped**; missing values render as nothing |
+| `{{{ readme_html }}}` | value without escaping, only for markup that GitHub already sanitized |
+| `{{ x\|filter }}` | filters, chained: `url`, `count` (12.4k), `thousands`, `date`, `datetime`, `dayshort`, `isoutc`, `lower`, `head:10`, `prefix:"v"`, `split` (comma separated text to a list), `default:"text"`, `raw` |
+| `{% if a and not b %}` … `{% elif a == "x" %}` … `{% else %}` … `{% endif %}` | conditions: paths, `not`, `==`, `!=`, `and`, `or` (no parentheses) |
+| `{% for x in list %}` … `{% else %}` … `{% endfor %}` | loops; inside: `loop.index`, `loop.index0`, `loop.first`, `loop.last`, `loop.length` |
+| `{% include "partials/tile" with value=x label="Text" %}` | partial; sees the current scope plus the arguments. The name can be a variable (`{% include page %}`); includes may recurse (dependency tree) |
+| `{# comment #}` | |
+
+Indentation is removed from the output: whitespace with a line break between two tags (or a tag and a template tag) disappears.
+A space between inline elements has to stay on one line. The host packs `templates/` into the wasm memory at startup
+(`host/templates.mjs`), the module compiles a template when it first needs it, and the host refuses to start if one is broken.
+`host/test/templates.test.mjs` checks the same without a database, and also fails for templates nothing uses. A mistake that only
+shows at render time (unknown filter) ends up as `<!-- template error: … -->` at the end of the page; the e2e tests fail on it.
 
 ## Deploying (Linux server with Docker)
 
@@ -95,8 +131,10 @@ E2E_DB_PORT=3307 E2E_DB_NAME=rack_test npm test   # end-to-end: real wasm + MySQ
 DB_PORT=3307 DB_NAME=rack_test node dev/seed.mjs  # demo data (+ a ready-made admin session cookie), then: node server.mjs
 ```
 
-Spice quirks met on the way, in case you touch the code: method calls cannot be chained on call results (`a.b().c()`), globals must be
-`UPPER_CASE`, struct fields need `public` to be used from another file, and `result`/`p` are reserved as variable names.
+Template files are read at startup, so restart the host after changing one (the wasm module only needs a rebuild when Spice code
+changes). Spice quirks met on the way, in case you touch the code: method calls cannot be chained on call results (`a.b().c()`), globals must be
+`UPPER_CASE`, struct fields need `public` to be used from another file, and `result`/`p` are reserved as variable names. If tests behave
+strangely after a struct that other files use inside a `Vector<…>` changed, build once with `--ignore-cache`.
 
 ## Notes and limits
 

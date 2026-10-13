@@ -1,0 +1,56 @@
+<div class="page-title"><div class="container"><h1>Administration</h1><p class="muted">Usage of the registry at a glance.</p></div></div>
+{% include "admin/nav" with active="overview" %}
+<div class="container section">
+    <div class="tiles">
+        {% include "partials/tile" with value=totals.packages|thousands label="Packages" %}
+        {% include "partials/tile" with value=totals.versions|thousands label="Versions" %}
+        {% include "partials/tile" with value=totals.users|thousands label="Maintainer accounts" %}
+        {% include "partials/tile" with value=totals.downloads|thousands label="Downloads, all time" %}
+        {% include "partials/tile" with value=totals.downloads_30d|thousands label="Downloads, 30 days" %}
+        {% include "partials/tile" with value=totals.views_30d|thousands label="Page views, 30 days" %}
+        {% include "partials/tile" with value=totals.admins|thousands label="Administrators" %}
+        {% include "partials/tile" with value=totals.suspended|thousands label="Suspended accounts" %}
+        {% include "partials/tile" with value=totals.stale|thousands label="Packages not synced for 2 days" %}
+    </div>
+    <section class="panel">{% include "partials/bar-chart" with chart=downloads_chart %}</section>
+    <section class="panel">{% include "partials/bar-chart" with chart=views_chart %}</section>
+    <section class="panel">{% include "partials/bar-chart" with chart=signups_chart %}</section>
+    <div class="columns-2">
+        <section class="panel">
+            <h2>Top packages (30 days)</h2>
+            <table class="table">
+                <thead><tr><th>Package</th><th class="num">Downloads</th><th class="num">Views</th><th class="num">All time</th></tr></thead>
+                <tbody>
+                    {% for row in top %}
+                    <tr>
+                        <td><a href="/packages/{{ row.name|url }}">{{ row.name }}</a></td><td class="num">{{ row.d30|thousands }}</td>
+                        <td class="num">{{ row.v30|thousands }}</td><td class="num">{{ row.downloads_total|thousands }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="4" class="muted">No packages yet.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </section>
+        <div>
+            <section class="panel">
+                <h2>Newest maintainers</h2>
+                <ul class="plain-list">
+                    {% for row in recent_users %}
+                    <li><strong>{{ row.login }}</strong> <span class="muted">{{ row.role }} &middot; joined {{ row.created_at|date }}</span></li>
+                    {% endfor %}
+                </ul>
+                <p><a href="/admin/users">Manage maintainers &rarr;</a></p>
+            </section>
+            <section class="panel">
+                <h2>Newest packages</h2>
+                <ul class="plain-list">
+                    {% for row in recent_packages %}
+                    <li><a href="/admin/packages/{{ row.name|url }}">{{ row.name }}</a> <span class="muted">by {{ row.owner_login }} &middot; {{ row.created_at|date }}</span></li>
+                    {% endfor %}
+                </ul>
+                <p><a href="/admin/packages">Manage packages &rarr;</a></p>
+            </section>
+        </div>
+    </div>
+</div>

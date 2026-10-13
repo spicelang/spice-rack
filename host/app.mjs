@@ -8,11 +8,13 @@ import { createPool, migrate, waitForDatabase } from './database.mjs';
 import { createEffects } from './effects.mjs';
 import { createRateLimiter } from './ratelimit.mjs';
 import { loadRuntime } from './runtime.mjs';
+import { loadTemplates } from './templates.mjs';
 
 const MAX_STEPS = 16;
 
 const MIME = {
   '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.ico': 'image/x-icon',
@@ -52,14 +54,16 @@ export async function createApp({ config, log, fetchImpl = fetch }) {
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'strict-origin-when-cross-origin',
     'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
-    // The UI does not need any script. README HTML comes from GitHub, but is never allowed to run code here either.
+    // The only script is /static/local-time.js (times in the visitor's timezone). README HTML comes from GitHub, but is never allowed to run code here either.
     'Content-Security-Policy':
-      "default-src 'none'; img-src * data:; style-src 'self' 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      "default-src 'none'; script-src 'self'; img-src * data:; style-src 'self' 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
   };
   if (config.app.secureCookies) securityHeaders['Strict-Transport-Security'] = 'max-age=31536000';
 
   const staticFiles = await loadStatic(config.publicDir);
-  const runtime = await loadRuntime(config.wasmPath);
+  const runtime = await loadRuntime(config.wasmPath, await loadTemplates(config.templatesDir));
+  const templateErrors = runtime.templateErrors();
+  if (templateErrors) throw new Error(`broken templates:\n${templateErrors}`);
   const pool = createPool(config.db);
   await waitForDatabase(pool, log);
   await migrate(config.db, config.migrationsDir, log);

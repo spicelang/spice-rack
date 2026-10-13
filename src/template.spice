@@ -1,0 +1,991 @@
+import "std/data/vector";
+import "./util";
+import "./json";
+
+// ---------------------------------------------------------------------------------------------------------------------
+// A small template engine, so the markup lives in templates/*.html and the Spice code only prepares data.
+//
+// The host reads the template files once and hands them to the module (see host/templates.mjs). A template is compiled
+// to a flat token list when it is first used; rendering walks that list against a scope of named values (database rows, small JSON documents,
+// strings, flags). The syntax is a subset of Jinja:
+//
+//   {{ user.login }}                 value, HTML-escaped
+//   {{{ readme_html }}}              value without escaping (only for markup that is trusted or sanitized elsewhere)
+//   {{ pkg.name|url }}               filters, chained with |: url, count, thousands, date, datetime, dayshort, lower,
+//                                    isoutc ("2026-10-12 19:43:11" -> "2026-10-12T19:43:11Z", for <time datetime>), head:N (first N characters), prefix:"v", split (comma separated text -> list), raw, default:"text"
+//   {% if a and not b or c == "x" %} conditions: path, not, ==, !=, and, or (no parentheses; "and" binds tighter)
+//   {% elif ... %} {% else %} {% endif %}
+//   {% for item in list %} ... {% else %} (empty) ... {% endfor %}      inside: loop.index, loop.index0, loop.first, loop.last, loop.length
+//   {% include "partials/card" with pkg=row label="Text" %}            the partial sees the current scope plus the arguments
+//   {% include page %}               the name can also come from a variable
+//   {# comment #}
+//
+// Indentation is dropped: whitespace with a line break between two tags (or a tag and a template tag) disappears, so
+// templates can be indented freely. Whitespace between inline elements or words has to stay on one line. Missing values render as nothing. Mistakes in a template (unknown filter or
+// template, unclosed block) do not abort the request: they are appended to the page as an HTML comment, and
+// `templateErrors` reports all of them for the host's startup check and the tests.
+// ---------------------------------------------------------------------------------------------------------------------
+
+const int TK_TEXT = 0;
+const int TK_OUT = 1;
+const int TK_RAW = 2;
+const int TK_IF = 3;
+const int TK_ELIF = 4;
+const int TK_ELSE = 5;
+const int TK_ENDIF = 6;
+const int TK_FOR = 7;
+const int TK_FOR_ELSE = 8;
+const int TK_ENDFOR = 9;
+const int TK_INCLUDE = 10;
+
+// Value kinds; 0 is "nothing", the kind of everything that does not exist
+const int VK_JSON = 1;
+const int VK_TEXT = 2;
+const int VK_BOOL = 3;
+
+const int MAX_INCLUDE_DEPTH = 24;
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Values and scope
+// ---------------------------------------------------------------------------------------------------------------------
+
+/**
+ * Something a template can read: a node of a JSON document, a piece of text or a flag
+ */
+public type Value struct {
+    public int kind = 0
+    public JV node
+    public String text
+    public bool flag = false
+    public bool raw = false      // Set by the raw filter: the output is not escaped
+}
+
+public type ScopeVar struct {
+    public String name
+    public Value val
+}
+
+/**
+ * The data a page is rendered with. Handlers bind names to values; templates read them.
+ */
+public type View struct {
+    public Vector<ScopeVar> vars
+}
+
+p View.add(string name, const Value& val) {
+    ScopeVar entry;
+    entry.name = String(name);
+    entry.val = val;
+    this.vars.pushBack(entry);
+}
+
+public p View.bind(string name, JV node) {
+    Value v;
+    v.kind = VK_JSON;
+    v.node = node;
+    this.add(name, v);
+}
+
+public p View.text(string name, const String& value) {
+    Value v;
+    v.kind = VK_TEXT;
+    v.text = value;
+    this.add(name, v);
+}
+
+public p View.flag(string name, bool value) {
+    Value v;
+    v.kind = VK_BOOL;
+    v.flag = value;
+    this.add(name, v);
+}
+
+/**
+ * Bind a list of strings
+ */
+public p View.list(string name, const Vector<String>& items) {
+    JsonWriter w;
+    w.beginArray();
+    for unsigned long i = 0l; i < items.getSize(); i++ { w.str(items.get(i)); }
+    w.endArray();
+    this.json(name, w.finish());
+}
+
+/**
+ * Bind a JSON document that was assembled with a JsonWriter
+ */
+public p View.json(string name, const String& jsonText) {
+    this.bind(name, parseJson(jsonText));
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Compilation
+// ---------------------------------------------------------------------------------------------------------------------
+
+type Tok struct {
+    public int kind = 0
+    public String text                // Text: the literal. Output/if/elif/for: the expression. Include: the template name or variable.
+    public String name                // for: the loop variable
+    public Vector<KeyValue> args      // include: name=expression pairs
+    public bool dynamic = false       // include: `text` is an expression instead of a quoted name
+    public int link = -1              // if/elif/else: the next branch or endif. for: the else or endfor. for-else: the endfor.
+    public int close = -1             // for: the endfor
+}
+
+public type Template struct {
+    public String name
+    public unsigned long from = 0l    // where the source starts in the memory of the set, and how long it is
+    public unsigned long length = 0l
+    public bool compiled = false
+    public Vector<Tok> toks
+    public String error
+}
+
+/**
+ * Split a tag body at spaces, keeping quoted strings together: `a b="c d"` -> [a, b="c d"]
+ */
+f<Vector<String>> splitWords(const String& input) {
+    Vector<String> words;
+    String current;
+    char quote = '\0';
+    for unsigned long i = 0l; i < input.getLength(); i++ {
+        const char c = input[i];
+        if quote != '\0' {
+            current.append(c);
+            if c == quote { quote = '\0'; }
+        } else if c == '"' || c == '\'' {
+            quote = c;
+            current.append(c);
+        } else if isSpaceChar(c) {
+            if !current.isEmpty() { words.pushBack(current); current = String(""); }
+        } else {
+            current.append(c);
+        }
+    }
+    if !current.isEmpty() { words.pushBack(current); }
+    return words;
+}
+
+/**
+ * Index of the first occurrence of `needle` that is not inside a quoted string, or -1
+ */
+f<long> findOutsideQuotes(const String& input, string needle, unsigned long from = 0l) {
+    const unsigned long needleLen = getRawLength(needle);
+    const unsigned long len = input.getLength();
+    char quote = '\0';
+    for unsigned long i = from; i < len; i++ {
+        const char c = input[i];
+        if quote != '\0' {
+            if c == quote { quote = '\0'; }
+            continue;
+        }
+        if c == '"' || c == '\'' { quote = c; continue; }
+        if i + needleLen > len { continue; }
+        bool same = true;
+        for unsigned long k = 0l; k < needleLen; k++ {
+            if input[i + k] != needle[k] { same = false; break; }
+        }
+        if same { return cast<long>(i); }
+    }
+    return -1l;
+}
+
+f<Vector<String>> splitOutsideQuotes(const String& input, string separator) {
+    Vector<String> parts;
+    const unsigned long sepLen = getRawLength(separator);
+    unsigned long start = 0l;
+    while true {
+        const long at = findOutsideQuotes(input, separator, start);
+        if at < 0l { break; }
+        parts.pushBack(input.getSubstring(start, at - cast<long>(start)));
+        start = cast<unsigned long>(at) + sepLen;
+    }
+    parts.pushBack(input.getSubstring(start));
+    return parts;
+}
+
+f<bool> isQuoted(const String& s) {
+    const unsigned long len = s.getLength();
+    if len < 2l { return false; }
+    const char first = s[0l];
+    return (first == '"' || first == '\'') && s[len - 1l] == first;
+}
+
+f<String> unquote(const String& s) {
+    return s.getSubstring(1l, cast<long>(s.getLength()) - 2l);
+}
+
+p Template.addText(const String& text) {
+    // A run of whitespace with a line break is indentation, if it sits between markup: after a '>' (or a template tag)
+    // and before a '<' (or a template tag). Such runs are removed, all other text stays as written.
+    String kept;
+    const unsigned long len = text.getLength();
+    unsigned long i = 0l;
+    while i < len {
+        const char c = text[i];
+        if !isSpaceChar(c) { kept.append(c); i++; continue; }
+        unsigned long stop = i;
+        bool lineBreak = false;
+        while stop < len && isSpaceChar(text[stop]) {
+            if text[stop] == '\n' { lineBreak = true; }
+            stop++;
+        }
+        const bool afterMarkup = i == 0l || text[i - 1l] == '>';
+        const bool beforeMarkup = stop == len || text[stop] == '<';
+        if !(lineBreak && afterMarkup && beforeMarkup) {
+            for unsigned long k = i; k < stop; k++ { kept.append(text[k]); }
+        }
+        i = stop;
+    }
+    if kept.isEmpty() { return; }
+    Tok tok;
+    tok.kind = TK_TEXT;
+    tok.text = kept;
+    this.toks.pushBack(tok);
+}
+
+p Template.fail(const String& message) {
+    if this.error.isEmpty() { this.error = this.name + ": " + message; }
+}
+
+/**
+ * Handle the body of a {% ... %} tag
+ */
+p Template.addStatement(const String& body, Vector<int>& open) {
+    const long space = body.find(' ');
+    String word = body;
+    String rest;
+    if space >= 0l {
+        word = body.getSubstring(0l, space);
+        rest = trimmed(body.getSubstring(cast<unsigned long>(space) + 1l));
+    }
+    const int self = cast<int>(this.toks.getSize());
+    Tok tok;
+
+    if word == "if" || word == "elif" {
+        if rest.isEmpty() { this.fail(String("missing condition after ") + word); return; }
+        tok.text = rest;
+        if word == "if" {
+            tok.kind = TK_IF;
+            this.toks.pushBack(tok);
+            open.pushBack(self);
+        } else {
+            if open.getSize() == 0l { this.fail(String("elif without if")); return; }
+            const int top = open.get(open.getSize() - 1l);
+            if this.toks.get(cast<unsigned long>(top)).kind != TK_IF && this.toks.get(cast<unsigned long>(top)).kind != TK_ELIF {
+                this.fail(String("elif without if"));
+                return;
+            }
+            tok.kind = TK_ELIF;
+            this.toks.pushBack(tok);
+            this.toks.get(cast<unsigned long>(top)).link = self;
+            open.popBack();
+            open.pushBack(self);
+        }
+    } else if word == "else" {
+        if open.getSize() == 0l { this.fail(String("else outside of a block")); return; }
+        const int top = open.get(open.getSize() - 1l);
+        const int topKind = this.toks.get(cast<unsigned long>(top)).kind;
+        if topKind == TK_IF || topKind == TK_ELIF {
+            tok.kind = TK_ELSE;
+        } else if topKind == TK_FOR {
+            tok.kind = TK_FOR_ELSE;
+            tok.close = top;
+        } else {
+            this.fail(String("duplicate else"));
+            return;
+        }
+        this.toks.pushBack(tok);
+        this.toks.get(cast<unsigned long>(top)).link = self;
+        open.popBack();
+            open.pushBack(self);
+    } else if word == "endif" {
+        if open.getSize() == 0l { this.fail(String("endif without if")); return; }
+        const int top = open.get(open.getSize() - 1l);
+        const int topKind = this.toks.get(cast<unsigned long>(top)).kind;
+        if topKind != TK_IF && topKind != TK_ELIF && topKind != TK_ELSE { this.fail(String("endif without if")); return; }
+        tok.kind = TK_ENDIF;
+        this.toks.pushBack(tok);
+        this.toks.get(cast<unsigned long>(top)).link = self;
+        open.popBack();
+    } else if word == "for" {
+        const long inAt = findOutsideQuotes(rest, " in ");
+        if inAt < 0l { this.fail(String("for needs the form: for item in list")); return; }
+        tok.kind = TK_FOR;
+        tok.name = trimmed(rest.getSubstring(0l, inAt));
+        tok.text = trimmed(rest.getSubstring(cast<unsigned long>(inAt) + 4l));
+        if tok.name.isEmpty() || tok.text.isEmpty() { this.fail(String("for needs the form: for item in list")); return; }
+        this.toks.pushBack(tok);
+        open.pushBack(self);
+    } else if word == "endfor" {
+        if open.getSize() == 0l { this.fail(String("endfor without for")); return; }
+        const int top = open.get(open.getSize() - 1l);
+        const int topKind = this.toks.get(cast<unsigned long>(top)).kind;
+        int forIdx = top;
+        if topKind == TK_FOR_ELSE { forIdx = this.toks.get(cast<unsigned long>(top)).close; }
+        else if topKind != TK_FOR { this.fail(String("endfor without for")); return; }
+        tok.kind = TK_ENDFOR;
+        this.toks.pushBack(tok);
+        this.toks.get(cast<unsigned long>(top)).link = self;
+        this.toks.get(cast<unsigned long>(forIdx)).close = self;
+        open.popBack();
+    } else if word == "include" {
+        const Vector<String> words = splitWords(rest);
+        if words.getSize() == 0l { this.fail(String("include needs a template name")); return; }
+        tok.kind = TK_INCLUDE;
+        const String target = words.get(0l);
+        tok.dynamic = !isQuoted(target);
+        tok.text = tok.dynamic ? target : unquote(target);
+        unsigned long next = 1l;
+        if words.getSize() > 1l {
+            if words.get(1l) != "with" { this.fail(String("expected 'with' after the template name of an include")); return; }
+            next = 2l;
+        }
+        for unsigned long i = next; i < words.getSize(); i++ {
+            const String arg = words.get(i);
+            const long eq = arg.find('=');
+            if eq <= 0l { this.fail(String("include arguments look like name=value, found: ") + arg); return; }
+            KeyValue kv;
+            kv.key = arg.getSubstring(0l, eq);
+            kv.value = arg.getSubstring(cast<unsigned long>(eq) + 1l);
+            tok.args.pushBack(kv);
+        }
+        this.toks.pushBack(tok);
+    } else {
+        this.fail(String("unknown statement: ") + word);
+    }
+}
+
+/**
+ * Turn the source of a template into tokens. Problems are recorded in `error`.
+ */
+public p Template.compile(const String& src) {
+    Vector<int> open;
+    const unsigned long len = src.getLength();
+    unsigned long pos = 0l;
+    while pos < len && this.error.isEmpty() {
+        // Find the next opening delimiter: {{ {% or {#
+        long found = -1l;
+        for unsigned long i = pos; i + 1l < len; i++ {
+            if src[i] != '{' { continue; }
+            const char n = src[i + 1l];
+            if n == '{' || n == '%' || n == '#' { found = cast<long>(i); break; }
+        }
+        if found < 0l {
+            this.addText(src.getSubstring(pos));
+            pos = len;
+            break;
+        }
+        const unsigned long at = cast<unsigned long>(found);
+        if at > pos { this.addText(src.getSubstring(pos, cast<long>(at - pos))); }
+
+        const char opener = src[at + 1l];
+        unsigned long skip = 2l;
+        String closer = String("}}");
+        if opener == '%' { closer = String("%}"); }
+        else if opener == '#' { closer = String("#}"); }
+        else if at + 2l < len && src[at + 2l] == '{' { skip = 3l; closer = String("}}}"); }
+
+        const long stop = src.find(closer.getRaw(), at + skip);
+        if stop < 0l { this.fail(String("unterminated tag, expected ") + closer); return; }
+        const String body = trimmed(src.getSubstring(at + skip, stop - cast<long>(at + skip)));
+        pos = cast<unsigned long>(stop) + closer.getLength();
+
+        if opener == '#' { continue; }
+        if opener == '%' { this.addStatement(body, open); continue; }
+        if body.isEmpty() { this.fail(String("empty expression")); return; }
+        Tok tok;
+        tok.kind = skip == 3l ? TK_RAW : TK_OUT;
+        tok.text = body;
+        this.toks.pushBack(tok);
+    }
+    if this.error.isEmpty() && open.getSize() > 0l {
+        const int top = open.get(open.getSize() - 1l);
+        const int kind = this.toks.get(cast<unsigned long>(top)).kind;
+        this.fail(String(kind == TK_FOR || kind == TK_FOR_ELSE ? "for" : "if") + " block is never closed");
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The set of all templates
+// ---------------------------------------------------------------------------------------------------------------------
+
+public type TemplateSet struct {
+    public unsigned long base = 0l    // address of the blob the host provided
+    public Vector<Template> items
+}
+
+f<char> peek(unsigned long address) {
+    unsafe {
+        byte* bytes = cast<byte*>(address);
+        return cast<char>(bytes[0l]);
+    }
+}
+
+f<String> slice(unsigned long address, unsigned long length) {
+    String text;
+    unsafe {
+        string raw = cast<string>(address);
+        text.append(raw, length);
+    }
+    return text;
+}
+
+/**
+ * Index the blob of the host: for each template `name\x02length\x03source`, where the length is in bytes. Only the headers
+ * are read here; a template is compiled when it is first needed.
+ */
+public p TemplateSet.load(unsigned long address, unsigned long size) {
+    this.base = address;
+    unsigned long pos = 0l;
+    while pos < size {
+        Template tpl;
+        while pos < size && peek(address + pos) != cast<char>(2) {
+            tpl.name.append(peek(address + pos));
+            pos++;
+        }
+        pos++;
+        unsigned long length = 0l;
+        while pos < size && peek(address + pos) != cast<char>(3) {
+            length = length * 10l + cast<unsigned long>(cast<int>(peek(address + pos)) - 48);
+            pos++;
+        }
+        pos++;
+        tpl.from = pos;
+        tpl.length = length;
+        this.items.pushBack(tpl);
+        pos += length;
+    }
+}
+
+/**
+ * Same for a blob in a String, which has to stay alive as long as the set is used
+ */
+public p TemplateSet.load(const String& blob) {
+    unsafe { this.load(cast<unsigned long>(blob.getRaw()), blob.getLength()); }
+}
+
+public f<int> TemplateSet.find(const String& name) {
+    for unsigned long i = 0l; i < this.items.getSize(); i++ {
+        if this.items.get(i).name == name { return cast<int>(i); }
+    }
+    return -1;
+}
+
+/**
+ * Compile the template if that has not happened yet. Elements of `items` never move, so references to them stay valid.
+ */
+p TemplateSet.prepare(int idx) {
+    Template& tpl = this.items.get(cast<unsigned long>(idx));
+    if tpl.compiled { return; }
+    Template fresh;
+    fresh.name = tpl.name;
+    const String source = slice(this.base + tpl.from, tpl.length);
+    fresh.compile(source);
+    tpl.compiled = true;
+    tpl.toks = fresh.toks;
+    tpl.error = fresh.error;
+}
+
+/**
+ * All problems of all templates, one per line; empty if everything is fine. Also checks that every include with a
+ * literal name refers to an existing template.
+ */
+public f<String> TemplateSet.errors() {
+    String report;
+    for unsigned long i = 0l; i < this.items.getSize(); i++ {
+        this.prepare(cast<int>(i));
+        const Template& tpl = this.items.get(i);
+        if !tpl.error.isEmpty() { report += tpl.error + "\n"; continue; }
+        for unsigned long k = 0l; k < tpl.toks.getSize(); k++ {
+            const Tok& tok = tpl.toks.get(k);
+            if tok.kind == TK_INCLUDE && !tok.dynamic && this.find(tok.text) < 0 {
+                report += tpl.name + ": includes the unknown template " + tok.text + "\n";
+            }
+        }
+    }
+    return report;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------------------------------------------------
+
+type LoopInfo struct {
+    public long index = 0l
+    public long count = 0l
+}
+
+type Env struct {
+    public Vector<ScopeVar> scope
+    public Vector<LoopInfo> loops
+    public String out
+    public String error
+    public int depth = 0
+}
+
+p Env.fail(const String& message) {
+    if this.error.isEmpty() { this.error = message; }
+}
+
+f<Value> noValue() {
+    Value v;
+    return v;
+}
+
+f<Value> textValue(const String& text) {
+    Value v;
+    v.kind = VK_TEXT;
+    v.text = text;
+    return v;
+}
+
+f<Value> boolValue(bool flag) {
+    Value v;
+    v.kind = VK_BOOL;
+    v.flag = flag;
+    return v;
+}
+
+f<String> valueText(const Value& v) {
+    if v.kind == VK_JSON { return v.node.str(); }
+    if v.kind == VK_TEXT { return v.text; }
+    if v.kind == VK_BOOL { return String(v.flag ? "true" : "false"); }
+    return String("");
+}
+
+f<long> valueNum(const Value& v) {
+    if v.kind == VK_JSON { return v.node.num(); }
+    if v.kind == VK_TEXT { return parseLong(v.text); }
+    if v.kind == VK_BOOL { return v.flag ? 1l : 0l; }
+    return 0l;
+}
+
+f<bool> valueTruthy(const Value& v) {
+    if v.kind == VK_BOOL { return v.flag; }
+    if v.kind == VK_TEXT { return !v.text.isEmpty(); }
+    if v.kind != VK_JSON || !v.node.exists() || v.node.isNull() { return false; }
+    if v.node.isArray() || v.node.isObject() { return v.node.size() > 0l; }
+    if v.node.isString() {
+        const String text = v.node.str();
+        return !text.isEmpty();
+    }
+    return v.node.truthy();
+}
+
+f<Value> loopValue(const Env& env, const String& field) {
+    const LoopInfo& info = env.loops.get(env.loops.getSize() - 1l);
+    if field == "index" { return textValue(fmtLong(info.index + 1l)); }
+    if field == "index0" { return textValue(fmtLong(info.index)); }
+    if field == "first" { return boolValue(info.index == 0l); }
+    if field == "last" { return boolValue(info.index + 1l == info.count); }
+    if field == "length" { return textValue(fmtLong(info.count)); }
+    return noValue();
+}
+
+/**
+ * Resolve a dotted path like `pkg.owner.login` against the scope, innermost names first
+ */
+f<Value> lookupPath(const Env& env, const String& path) {
+    const Vector<String> parts = split(path, '.');
+    const String first = parts.get(0l);
+    if first == "loop" && env.loops.getSize() > 0l {
+        if parts.getSize() != 2l { return noValue(); }
+        return loopValue(env, parts.get(1l));
+    }
+    Value current;
+    bool found = false;
+    for unsigned long i = env.scope.getSize(); i > 0l; i-- {
+        const ScopeVar& entry = env.scope.get(i - 1l);
+        if entry.name == first { current = entry.val; found = true; break; }
+    }
+    if !found { return noValue(); }
+    for unsigned long k = 1l; k < parts.getSize(); k++ {
+        if current.kind != VK_JSON { return noValue(); }
+        const String key = parts.get(k);
+        current.node = current.node.get(key.getRaw());
+        if !current.node.exists() { return noValue(); }
+    }
+    return current;
+}
+
+f<bool> isNumberLiteral(const String& s) {
+    if s.isEmpty() { return false; }
+    for unsigned long i = 0l; i < s.getLength(); i++ {
+        const char c = s[i];
+        if !(c >= '0' && c <= '9') && !(i == 0l && c == '-' && s.getLength() > 1l) { return false; }
+    }
+    return true;
+}
+
+f<Value> evalOperand(const Env& env, const String& expr) {
+    const String e = expr.trim();
+    if isQuoted(e) { return textValue(unquote(e)); }
+    if isNumberLiteral(e) { return textValue(e); }
+    return lookupPath(env, e);
+}
+
+f<Value> applyFilter(Env& env, const Value& input, const String& spec) {
+    const long colon = spec.find(':');
+    String name = spec;
+    String arg;
+    if colon >= 0l {
+        name = trimmed(spec.getSubstring(0l, colon));
+        arg = trimmed(spec.getSubstring(cast<unsigned long>(colon) + 1l));
+    }
+    if name == "raw" {
+        Value v = input;
+        v.raw = true;
+        return v;
+    }
+    if name == "default" {
+        if valueTruthy(input) { return input; }
+        return evalOperand(env, arg);
+    }
+    if name == "split" {
+        JsonWriter w;
+        w.beginArray();
+        const String text = valueText(input);
+        if !text.isEmpty() {
+            const Vector<String> items = split(text, ',');
+            for unsigned long i = 0l; i < items.getSize(); i++ { w.str(items.get(i)); }
+        }
+        w.endArray();
+        Value v;
+        v.kind = VK_JSON;
+        v.node = parseJson(w.finish());
+        return v;
+    }
+    const String text = valueText(input);
+    if name == "url" { return textValue(urlEncode(text)); }
+    if name == "lower" { return textValue(lower(text)); }
+    if name == "date" { return textValue(fmtDate(text)); }
+    if name == "isoutc" { return textValue(fmtIsoUtc(text)); }
+    if name == "datetime" { return textValue(fmtDateTime(text)); }
+    if name == "dayshort" { return textValue(fmtDayShort(text)); }
+    if name == "prefix" { return textValue(valueText(evalOperand(env, arg)) + text); }
+    if name == "head" { return textValue(head(text, cast<unsigned long>(valueNum(evalOperand(env, arg))))); }
+    if name == "count" { return textValue(fmtCount(valueNum(input))); }
+    if name == "thousands" { return textValue(fmtThousands(valueNum(input))); }
+    env.fail(String("unknown filter: ") + name);
+    return input;
+}
+
+f<Value> evalPipeline(Env& env, const String& expr) {
+    const Vector<String> parts = splitOutsideQuotes(expr, "|");
+    Value v = evalOperand(env, parts.get(0l));
+    for unsigned long i = 1l; i < parts.getSize(); i++ {
+        const String filter = trimmed(parts.get(i));
+        v = applyFilter(env, v, filter);
+    }
+    return v;
+}
+
+f<bool> evalTerm(Env& env, const String& term) {
+    const String t = term.trim();
+    if t.startsWith("not ") { return !evalTerm(env, t.getSubstring(4l)); }
+    const long eq = findOutsideQuotes(t, "==");
+    const long ne = findOutsideQuotes(t, "!=");
+    if eq >= 0l || ne >= 0l {
+        const long at = eq >= 0l ? eq : ne;
+        const Value left = evalPipeline(env, t.getSubstring(0l, at));
+        const Value right = evalPipeline(env, t.getSubstring(cast<unsigned long>(at) + 2l));
+        const bool same = valueText(left) == valueText(right);
+        return eq >= 0l ? same : !same;
+    }
+    const Value v = evalPipeline(env, t);
+    return valueTruthy(v);
+}
+
+f<bool> evalCondition(Env& env, const String& expr) {
+    const Vector<String> alternatives = splitOutsideQuotes(expr, " or ");
+    for unsigned long i = 0l; i < alternatives.getSize(); i++ {
+        const Vector<String> factors = splitOutsideQuotes(alternatives.get(i), " and ");
+        bool all = true;
+        for unsigned long k = 0l; k < factors.getSize(); k++ {
+            if !evalTerm(env, factors.get(k)) { all = false; break; }
+        }
+        if all { return true; }
+    }
+    return false;
+}
+
+p emit(Env& env, const Value& v, bool rawOutput) {
+    const String text = valueText(v);
+    if rawOutput || v.raw { env.out += text; } else { env.out += esc(text); }
+}
+
+p renderRange(TemplateSet& set, const Template& tpl, int from, int to, Env& env) {
+    int ip = from;
+    while ip < to {
+        const Tok& tok = tpl.toks.get(cast<unsigned long>(ip));
+        if tok.kind == TK_TEXT {
+            env.out += tok.text;
+            ip++;
+        } else if tok.kind == TK_OUT || tok.kind == TK_RAW {
+            const Value v = evalPipeline(env, tok.text);
+            emit(env, v, tok.kind == TK_RAW);
+            ip++;
+        } else if tok.kind == TK_IF {
+            int cur = ip;
+            while true {
+                const Tok& branch = tpl.toks.get(cast<unsigned long>(cur));
+                if branch.kind == TK_ENDIF { break; }
+                if branch.kind == TK_ELSE || evalCondition(env, branch.text) {
+                    renderRange(set, tpl, cur + 1, branch.link, env);
+                    break;
+                }
+                cur = branch.link;
+            }
+            // Continue after the endif of this chain
+            int endif = cur;
+            while tpl.toks.get(cast<unsigned long>(endif)).kind != TK_ENDIF { endif = tpl.toks.get(cast<unsigned long>(endif)).link; }
+            ip = endif + 1;
+        } else if tok.kind == TK_FOR {
+            const Value list = evalPipeline(env, tok.text);
+            const int bodyEnd = tok.link;
+            const int endfor = tok.close;
+            const long count = list.kind == VK_JSON ? cast<long>(list.node.size()) : 0l;
+            if count == 0l {
+                if tpl.toks.get(cast<unsigned long>(bodyEnd)).kind == TK_FOR_ELSE { renderRange(set, tpl, bodyEnd + 1, endfor, env); }
+            } else {
+                LoopInfo info;
+                info.count = count;
+                env.loops.pushBack(info);
+                long n = 0l;
+                for JV item = list.node.first(); item.exists(); item = item.after() {
+                    env.loops.get(env.loops.getSize() - 1l).index = n;
+                    ScopeVar entry;
+                    entry.name = tok.name;
+                    entry.val.kind = VK_JSON;
+                    entry.val.node = item;
+                    env.scope.pushBack(entry);
+                    renderRange(set, tpl, ip + 1, bodyEnd, env);
+                    env.scope.popBack();
+                    n++;
+                }
+                env.loops.popBack();
+            }
+            ip = endfor + 1;
+        } else if tok.kind == TK_INCLUDE {
+            String target = tok.text;
+            if tok.dynamic {
+                const Value named = evalPipeline(env, tok.text);
+                target = valueText(named);
+            }
+            const int idx = set.find(target);
+            if idx < 0 {
+                env.fail(tpl.name + ": unknown template " + target);
+            } else if env.depth >= MAX_INCLUDE_DEPTH {
+                env.fail(tpl.name + ": includes are nested too deeply");
+            } else {
+                set.prepare(idx);
+                const Template& included = set.items.get(cast<unsigned long>(idx));
+                if !included.error.isEmpty() {
+                    env.fail(included.error);
+                    ip++;
+                    continue;
+                }
+                // Arguments are evaluated before any of them becomes visible
+                Vector<ScopeVar> passed;
+                for unsigned long i = 0l; i < tok.args.getSize(); i++ {
+                    ScopeVar entry;
+                    entry.name = tok.args.get(i).key;
+                    entry.val = evalPipeline(env, tok.args.get(i).value);
+                    passed.pushBack(entry);
+                }
+                for unsigned long i = 0l; i < passed.getSize(); i++ { env.scope.pushBack(passed.get(i)); }
+                env.depth++;
+                renderRange(set, included, 0, cast<int>(included.toks.getSize()), env);
+                env.depth--;
+                for unsigned long i = 0l; i < passed.getSize(); i++ { env.scope.popBack(); }
+            }
+            ip++;
+        } else {
+            // Branch markers are only reached when a branch ends; the callers stop before them
+            ip++;
+        }
+    }
+}
+
+/**
+ * Render a template. Mistakes are appended to the output as an HTML comment.
+ */
+public f<String> TemplateSet.render(string name, const View& view) {
+    Env env;
+    env.scope = view.vars;
+    const int idx = this.find(String(name));
+    if idx < 0 {
+        env.fail(String("unknown template ") + name);
+    } else {
+        this.prepare(idx);
+        const Template& tpl = this.items.get(cast<unsigned long>(idx));
+        if !tpl.error.isEmpty() {
+            env.fail(tpl.error);
+        } else {
+            renderRange(*this, tpl, 0, cast<int>(tpl.toks.getSize()), env);
+        }
+    }
+    if !env.error.isEmpty() { env.out += "<!-- template error: " + esc(env.error) + " -->"; }
+    return env.out;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Access to the templates the host provided
+// ---------------------------------------------------------------------------------------------------------------------
+
+long TEMPLATES_ADDR = 0l;
+long TEMPLATES_SIZE = 0l;
+
+/**
+ * The host copies all templates into the wasm memory once and tells the module where they are and how large they are
+ */
+#[core.compiler.mangle = false]
+public p rackSetTemplates(unsigned int ptr, unsigned int size) {
+    TEMPLATES_ADDR = cast<long>(ptr);
+    TEMPLATES_SIZE = cast<long>(size);
+}
+
+public f<TemplateSet> loadHostTemplates() {
+    TemplateSet set;
+    if TEMPLATES_ADDR != 0l { set.load(cast<unsigned long>(TEMPLATES_ADDR), cast<unsigned long>(TEMPLATES_SIZE)); }
+    return set;
+}
+
+/**
+ * Render a template that is not a page, e.g. an XML feed
+ */
+public f<String> renderTemplate(string name, const View& view) {
+    TemplateSet templates = loadHostTemplates();
+    return templates.render(name, view);
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------------------------------------------------
+
+/**
+ * One record of the host's template blob
+ */
+f<String> rec(string name, const String& source) {
+    String r;
+    r += name;
+    r.append(cast<char>(2));
+    r += fmtLong(cast<long>(source.getLength()));
+    r.append(cast<char>(3));
+    r += source;
+    return r;
+}
+
+f<String> rec(string name, string source) {
+    return rec(name, String(source));
+}
+
+f<String> demoRender(const String& blob, string name, const View& view) {
+    TemplateSet set;
+    set.load(blob);
+    return set.render(name, view);
+}
+
+#[test]
+f<bool> testTemplateOutputAndEscaping() {
+    View view;
+    view.json("user", String("{\"login\":\"a<b>&\\\"'\",\"n\":12345,\"tags\":\"x,y\"}"));
+    view.text("html", String("<b>bold</b>"));
+    const String blob = rec("page", "Hi {{ user.login }}|{{{ html }}}|{{ html }}|{{ html|raw }}|{{ user.missing }}|{{ user.n|thousands }}|{{ user.n|count }}|{# gone #}.");
+    const String out = demoRender(blob, "page", view);
+    assert out == "Hi a&lt;b&gt;&amp;&quot;&#39;|<b>bold</b>|&lt;b&gt;bold&lt;/b&gt;|<b>bold</b>||12,345|12.3k|.";
+    return true;
+}
+
+#[test]
+f<bool> testTemplateFilters() {
+    View view;
+    view.text("name", String("a b/c"));
+    view.text("day", String("2026-09-05 10:11:12"));
+    view.text("empty", String(""));
+    view.text("csv", String("one,two"));
+    const String blob = rec("page", "{{ name|prefix:\"v\" }}|{{ day|head:10 }}|{{ name|url }}|{{ day|date }}|{{ day|datetime }}|{{ day|isoutc }}|{{ name|lower }}|{{ empty|default:\"none\" }}|{{ name|default:\"none\" }}|{% for t in csv|split %}[{{ t }}]{% endfor %}|{% for t in empty|split %}x{% else %}no tags{% endfor %}");
+    const String out = demoRender(blob, "page", view);
+    assert out == "va b/c|2026-09-05|a%20b%2Fc|5 Sep 2026|5 Sep 2026, 10:11 UTC|2026-09-05T10:11:12Z|a b/c|none|a b/c|[one][two]|no tags";
+    return true;
+}
+
+#[test]
+f<bool> testTemplateConditions() {
+    View view;
+    view.flag("yes", true);
+    view.flag("no", false);
+    view.text("mode", String("b"));
+    view.json("list", String("[1]"));
+    view.json("none", String("[]"));
+    const String blob = rec("page", "{% if no %}A{% elif mode == \"a\" %}B{% elif mode == \"b\" and yes %}C{% else %}D{% endif %}" +
+                            String("|{% if not no and yes %}E{% endif %}|{% if no or list %}F{% endif %}|{% if none %}G{% else %}H{% endif %}") +
+                            "|{% if mode != \"b\" %}I{% else %}J{% endif %}|{% if mode == \"a or b\" %}K{% else %}L{% endif %}");
+    const String out = demoRender(blob, "page", view);
+    assert out == "C|E|F|H|J|L";
+    return true;
+}
+
+#[test]
+f<bool> testTemplateLoops() {
+    View view;
+    view.json("rows", String("[{\"n\":\"a\",\"sub\":[1,2]},{\"n\":\"b\",\"sub\":[]}]"));
+    view.json("empty", String("[]"));
+    const String blob = rec("page", "{% for r in rows %}{{ loop.index }}/{{ loop.length }}{% if loop.first %}^{% endif %}{% if loop.last %}${% endif %}:{{ r.n }}" +
+                            String("({% for s in r.sub %}{{ s }}{% if not loop.last %},{% endif %}{% else %}-{% endfor %}) {% endfor %}") +
+                            "|{% for r in empty %}x{% else %}nothing{% endfor %}");
+    const String out = demoRender(blob, "page", view);
+    assert out == "1/2^:a(1,2) 2/2$:b(-) |nothing";
+    return true;
+}
+
+#[test]
+f<bool> testTemplateIncludes() {
+    View view;
+    view.json("rows", String("[{\"n\":\"a\"},{\"n\":\"b\"}]"));
+    view.text("page", String("inner"));
+    view.text("global", String("G"));
+    view.json("root", String("{\"n\":\"r\",\"kids\":[{\"n\":\"k1\",\"kids\":[{\"n\":\"leaf\"}]},{\"n\":\"k2\"}]}"));
+    String blob = rec("card", "<{{ item.n }}{{ suffix }}{{ global }}>");
+    blob += rec("inner", "[inner]");
+    blob += rec("tree", "{{ node.n }}{% if node.kids %}({% for k in node.kids %}{% include \"tree\" with node=k %}{% endfor %}){% endif %}");
+    blob += rec("main", "{% for r in rows %}{% include \"card\" with item=r suffix=\"!\" %}{% endfor %}|{% include page %}|{% include \"tree\" with node=root %}");
+    const String out = demoRender(blob, "main", view);
+    assert out == "<a!G><b!G>|[inner]|r(k1(leaf)k2)";
+    return true;
+}
+
+#[test]
+f<bool> testTemplateWhitespace() {
+    View view;
+    view.text("x", String("1"));
+    const String blob = rec("page", "<ul>\n    <li>{{ x }}</li>\n    {% if x %}\n    <li>two</li>\n    {% endif %}\n</ul>\n<b>a</b> <i>b</i>");
+    const String out = demoRender(blob, "page", view);
+    assert out == "<ul><li>1</li><li>two</li></ul><b>a</b> <i>b</i>";
+    return true;
+}
+
+#[test]
+f<bool> testTemplateErrors() {
+    View view;
+    TemplateSet set;
+    String blob = rec("a", "{% if x %}open");
+    blob += rec("b", "{{ x|nope }}");
+    blob += rec("c", "{% include \"zzz\" %}");
+    blob += rec("d", "{% endfor %}");
+    blob += rec("e", "{{ x");
+    blob += rec("f", "fine");
+    set.load(blob);
+    const String report = set.errors();
+    assert report.contains("a: if block is never closed");
+    assert report.contains("d: endfor without for");
+    assert report.contains("e: unterminated tag");
+    assert report.contains("c: includes the unknown template zzz");
+    assert !report.contains("f:");
+    const String badFilter = set.render("b", view);
+    assert badFilter.contains("template error: unknown filter: nope");
+    const String missing = set.render("missing", view);
+    assert missing.contains("template error: unknown template missing");
+    return true;
+}

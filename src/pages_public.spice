@@ -3,36 +3,12 @@ import "./util";
 import "./json";
 import "./core";
 import "./layout";
+import "./template";
 import "./search";
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Public pages besides the package page: home, search, the publishing guide, robots and sitemap
 // ---------------------------------------------------------------------------------------------------------------------
-
-f<String> cardList(JV rows, string emptyText) {
-    if rows.size() == 0l { return String("<p class=\"muted\">") + emptyText + "</p>"; }
-    String h = String("<ul class=\"card-list\">");
-    for JV row = rows.first(); row.exists(); row = row.after() { h += packageCard(row); }
-    h += "</ul>";
-    return h;
-}
-
-f<String> miniList(JV rows, const String& metric) {
-    if rows.size() == 0l { return String("<p class=\"muted\">Nothing here yet.</p>"); }
-    String h = String("<ol class=\"mini-list\">");
-    for JV row = rows.first(); row.exists(); row = row.after() {
-        const String name = row.getStr("name");
-        h += "<li><a href=\"/packages/" + urlEncode(name) + "\"><span class=\"mini-name\">" + esc(name) + "</span>";
-        h += "<span class=\"mini-desc\">" + esc(row.getStr("description")) + "</span></a>";
-        String value;
-        if metric == "downloads" { value = fmtCount(row.getNum("downloads_total")) + " downloads"; }
-        else if metric == "updated" { value = fmtDate(row.getStr("updated_at")); }
-        else { value = fmtDate(row.getStr("created_at")); }
-        h += "<span class=\"mini-metric\">" + esc(value) + "</span></li>";
-    }
-    h += "</ol>";
-    return h;
-}
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Home
@@ -58,40 +34,18 @@ public f<String> handleHome(Ctx& ctx) {
     JV fresh = ctx.rows(0, 3l);
     JV tags = ctx.rows(0, 4l);
 
-    String h = String("<section class=\"hero\"><div class=\"container hero-inner\">");
-    h += "<h1>Find and share <span class=\"accent\">Spice</span> packages</h1>";
-    h += "<p class=\"lead\">The community registry for the Spice programming language. Search libraries, read their docs, inspect dependencies and publish your own.</p>";
-    h += "<form class=\"hero-search\" action=\"/packages\" method=\"get\" role=\"search\"><label class=\"sr-only\" for=\"hero-q\">Search packages</label>";
-    h += "<input id=\"hero-q\" type=\"search\" name=\"q\" placeholder=\"Search packages, e.g. json, http, cli\" autocomplete=\"off\"><button class=\"btn btn-primary\" type=\"submit\">Search</button></form>";
-    h += "<ul class=\"hero-stats\"><li><strong>" + fmtThousands(stats.getNum("packages")) + "</strong> packages</li>";
-    h += "<li><strong>" + fmtThousands(stats.getNum("downloads")) + "</strong> downloads</li>";
-    h += "<li><strong>" + fmtThousands(stats.getNum("maintainers")) + "</strong> maintainers</li></ul>";
-    if tags.size() > 0l {
-        h += "<ul class=\"tags hero-tags\">";
-        for JV t = tags.first(); t.exists(); t = t.after() { h += "<li>" + tagChip(t.getStr("tag")) + "</li>"; }
-        h += "</ul>";
-    }
-    h += "</div></section>";
-
-    h += "<div class=\"container section\"><div class=\"columns-3\">";
-    h += "<section><h2>Most downloaded</h2>" + miniList(top, String("downloads")) + "<p><a href=\"/packages?sort=downloads\">Browse all &rarr;</a></p></section>";
-    h += "<section><h2>Recently updated</h2>" + miniList(updated, String("updated")) + "<p><a href=\"/packages?sort=updated\">See more &rarr;</a></p></section>";
-    h += "<section><h2>New packages</h2>" + miniList(fresh, String("created")) + "<p><a href=\"/packages?sort=newest\">See more &rarr;</a></p></section>";
-    h += "</div></div>";
-
-    h += "<section class=\"cta\"><div class=\"container cta-inner\"><div><h2>Got a package to share?</h2>";
-    h += "<p class=\"muted\">Sign in with GitHub, point the registry at your repository and tag a release. That is all it takes.</p></div>";
-    h += "<a class=\"btn btn-primary\" href=\"/docs/publishing\">Read the publishing guide</a></div></section>";
-    return ctx.html(200, layoutPage(ctx, String("Spice packages"), String("The package registry for the Spice programming language."), h));
+    View view;
+    view.bind("stats", stats);
+    view.bind("top", top);
+    view.bind("updated", updated);
+    view.bind("fresh", fresh);
+    view.bind("tags", tags);
+    return ctx.html(200, renderPage(ctx, "pages/home", String("Spice packages"), String("The package registry for the Spice programming language."), view));
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Search
 // ---------------------------------------------------------------------------------------------------------------------
-
-f<String> sortOption(const String& value, const String& label, const String& current) {
-    return String("<option value=\"") + value + "\"" + (value == current ? " selected" : "") + ">" + label + "</option>";
-}
 
 f<String> tagsQuery(const SearchParams& sp, const String& addTag, const String& removeTag) {
     String query;
@@ -128,56 +82,55 @@ public f<String> handleSearch(Ctx& ctx) {
     JV tags = ctx.rows(0, 2l);
     const long pages = pageCount(total, sp.perPage);
 
-    String h = String("<div class=\"page-title\"><div class=\"container\"><h1>");
-    if !sp.q.isEmpty() { h += "Results for &ldquo;" + esc(sp.q) + "&rdquo;"; }
-    else if !sp.owner.isEmpty() { h += "Packages by " + esc(sp.owner); }
-    else { h += "All packages"; }
-    h += "</h1><p class=\"muted\">" + fmtThousands(total) + (total == 1l ? " package" : " packages") + " found</p></div></div>";
+    // The links that drop one of the active filters
+    JsonWriter filters;
+    filters.beginArray();
+    JsonWriter activeTags;
+    activeTags.beginArray();
+    for unsigned long i = 0l; i < sp.tags.getSize(); i++ {
+        activeTags.str(sp.tags.get(i));
+        filters.beginObject();
+        filters.kStr("query", tagsQuery(sp, String(""), sp.tags.get(i)));
+        filters.kStr("label", sp.tags.get(i));
+        filters.endObject();
+    }
+    activeTags.endArray();
+    if !sp.owner.isEmpty() {
+        SearchParams withoutOwner = sp;
+        withoutOwner.owner = String("");
+        filters.beginObject();
+        filters.kStr("query", tagsQuery(withoutOwner, String(""), String("")));
+        filters.kStr("label", String("by ") + sp.owner);
+        filters.endObject();
+    }
+    filters.endArray();
 
-    h += "<div class=\"container search-layout\"><aside class=\"filters\">";
-    h += "<form action=\"/packages\" method=\"get\" class=\"filter-form\">";
-    h += "<label for=\"q\">Search</label><input id=\"q\" type=\"search\" name=\"q\" value=\"" + esc(sp.q) + "\" placeholder=\"Name, description or tag\">";
-    h += "<label for=\"sort\">Sort by</label><select id=\"sort\" name=\"sort\">";
-    h += sortOption(String("relevance"), String("Relevance"), sp.sort) + sortOption(String("downloads"), String("Most downloaded"), sp.sort);
-    h += sortOption(String("updated"), String("Recently updated"), sp.sort) + sortOption(String("newest"), String("Newest"), sp.sort);
-    h += sortOption(String("stars"), String("Most starred"), sp.sort) + sortOption(String("name"), String("Name (A-Z)"), sp.sort);
-    h += "</select>";
-    for unsigned long i = 0l; i < sp.tags.getSize(); i++ { h += "<input type=\"hidden\" name=\"tag\" value=\"" + esc(sp.tags.get(i)) + "\">"; }
-    if !sp.owner.isEmpty() { h += "<input type=\"hidden\" name=\"owner\" value=\"" + esc(sp.owner) + "\">"; }
-    h += "<button class=\"btn btn-primary btn-block\" type=\"submit\">Apply</button></form>";
+    // The popular tags add themselves to the current filters
+    JsonWriter popular;
+    popular.beginArray();
+    for JV t = tags.first(); t.exists(); t = t.after() {
+        const String tag = t.getStr("tag");
+        popular.beginObject();
+        popular.kStr("tag", tag);
+        popular.kStr("query", tagsQuery(sp, tag, String("")));
+        popular.kNum("packages", t.getNum("packages"));
+        popular.endObject();
+    }
+    popular.endArray();
 
-    if sp.tags.getSize() > 0l || !sp.owner.isEmpty() || !sp.q.isEmpty() {
-        h += "<h2>Active filters</h2><ul class=\"tags\">";
-        for unsigned long i = 0l; i < sp.tags.getSize(); i++ {
-            h += "<li><a class=\"tag tag-active\" href=\"/packages?" + tagsQuery(sp, String(""), sp.tags.get(i)) + "\" title=\"Remove filter\">" + esc(sp.tags.get(i)) + " &times;</a></li>";
-        }
-        if !sp.owner.isEmpty() {
-            SearchParams withoutOwner = sp;
-            withoutOwner.owner = String("");
-            h += "<li><a class=\"tag tag-active\" href=\"/packages?" + tagsQuery(withoutOwner, String(""), String("")) + "\" title=\"Remove filter\">by " + esc(sp.owner) + " &times;</a></li>";
-        }
-        h += "</ul><p><a href=\"/packages\">Clear all</a></p>";
-    }
-    h += "<h2>Popular tags</h2>";
-    if tags.size() == 0l { h += "<p class=\"muted small\">No tags yet.</p>"; }
-    else {
-        h += "<ul class=\"tags\">";
-        for JV t = tags.first(); t.exists(); t = t.after() {
-            const String tag = t.getStr("tag");
-            h += "<li><a class=\"tag\" href=\"/packages?" + tagsQuery(sp, tag, String("")) + "\">" + esc(tag) + " <span class=\"tag-count\">" + fmtLong(t.getNum("packages")) + "</span></a></li>";
-        }
-        h += "</ul>";
-    }
-    h += "</aside><section class=\"results\">";
-    if results.size() == 0l {
-        h += "<div class=\"empty\"><p><strong>No packages found.</strong></p><p class=\"muted\">Try a different search term or remove some filters.</p></div>";
-    } else {
-        h += cardList(results, "");
-        h += pagination(String("/packages"), sp.baseQuery(), sp.page, pages);
-    }
-    h += "</section></div>";
+    View view;
+    view.text("q", sp.q);
+    view.text("owner", sp.owner);
+    view.text("sort", sp.sort);
+    view.text("total", fmtLong(total));
+    view.flag("single", total == 1l);
+    view.json("active_tags", activeTags.finish());
+    view.json("filters", filters.finish());
+    view.json("popular", popular.finish());
+    view.bind("results", results);
+    view.json("pager", paginationJson(String("/packages"), sp.baseQuery(), sp.page, pages));
     const String title = sp.q.isEmpty() ? String("Packages") : String("Search: ") + sp.q;
-    return ctx.html(200, layoutPage(ctx, title, String("Browse and search Spice packages."), h));
+    return ctx.html(200, renderPage(ctx, "pages/search", title, String("Browse and search Spice packages."), view));
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -185,28 +138,8 @@ public f<String> handleSearch(Ctx& ctx) {
 // ---------------------------------------------------------------------------------------------------------------------
 
 public f<String> handlePublishingDocs(Ctx& ctx) {
-    String h = String("<div class=\"container narrow section prose\"><h1>Publishing a package</h1>");
-    h += "<p class=\"lead\">A package on the registry is a GitHub repository. Releases of the repository are the versions of the package.</p>";
-    h += "<ol class=\"steps\">";
-    h += "<li><h2>Sign in</h2><p><a href=\"/auth/github\">Sign in with GitHub</a>. The registry only asks for your public profile.</p></li>";
-    h += "<li><h2>Describe your dependencies</h2><p>Add a <code>spice.json</code> file to the root of your repository. It is optional, but needed for the dependency tree:</p>";
-    h += "<pre class=\"code\"><code>{\n  \"name\": \"my-package\",\n  \"dependencies\": {\n    \"json-parser\": \"^1.2.0\",\n    \"http-client\": \"&gt;=2.0.0, &lt;3.0.0\"\n  },\n  \"devDependencies\": {\n    \"test-kit\": \"*\"\n  }\n}</code></pre></li>";
-    h += "<li><h2>Tag a release</h2><p>Create a GitHub release whose tag is a <a href=\"https://semver.org\" rel=\"noopener\">semantic version</a>, for example <code>v1.0.0</code>. The release notes become the changelog. Tags that are not semantic versions are ignored.</p></li>";
-    h += "<li><h2>Create the package</h2><p>Open the <a href=\"/dashboard/packages/new\">dashboard</a>, pick your repository and choose a name and a few tags. You need push access to the repository.</p></li>";
-    h += "<li><h2>Keep it in sync</h2><p>The registry re-reads README, releases and dependencies regularly. After a release you can also hit <em>Sync now</em> on the package management page.</p></li></ol>";
-    h += "<h2>Version constraints</h2><table class=\"table\"><thead><tr><th>Constraint</th><th>Matches</th></tr></thead><tbody>";
-    h += "<tr><td><code>1.2.3</code></td><td>exactly 1.2.3</td></tr>";
-    h += "<tr><td><code>^1.2.3</code></td><td>1.2.3 up to, but excluding 2.0.0</td></tr>";
-    h += "<tr><td><code>~1.2.3</code></td><td>1.2.3 up to, but excluding 1.3.0</td></tr>";
-    h += "<tr><td><code>1.2.x</code></td><td>any 1.2 release</td></tr>";
-    h += "<tr><td><code>&gt;=1.0.0, &lt;2.0.0</code></td><td>a range</td></tr>";
-    h += "<tr><td><code>*</code></td><td>any version</td></tr></tbody></table>";
-    h += "<h2>Using the registry API</h2><p>Everything on this site is available as JSON, for tools that want to resolve and fetch packages:</p>";
-    h += "<ul><li><code>GET /api/v1/packages?q=json&amp;tag=parser&amp;sort=downloads</code></li>";
-    h += "<li><code>GET /api/v1/packages/{name}</code></li>";
-    h += "<li><code>GET /api/v1/packages/{name}/versions/{version}</code> (use <code>latest</code> for the newest release)</li>";
-    h += "<li><code>GET /api/v1/packages/{name}/versions/{version}/download</code> counts the download and redirects to the archive</li></ul></div>";
-    return ctx.html(200, layoutPage(ctx, String("Publishing a package"), String("How to publish a Spice package on the registry."), h));
+    View view;
+    return ctx.html(200, renderPage(ctx, "pages/docs-publishing", String("Publishing a package"), String("How to publish a Spice package on the registry."), view));
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -226,21 +159,14 @@ public f<String> handleSitemap(Ctx& ctx) {
         return batch.finish();
     }
     JV rows = ctx.rows(0, 0l);
-    String xml = String("<?xml version=\"1.0\" encoding=\"UTF-8\"?><urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">");
-    xml += "<url><loc>" + esc(ctx.config.baseUrl) + "/</loc></url>";
-    xml += "<url><loc>" + esc(ctx.config.baseUrl) + "/packages</loc></url>";
-    for JV row = rows.first(); row.exists(); row = row.after() {
-        xml += "<url><loc>" + esc(ctx.config.baseUrl) + "/packages/" + esc(urlEncode(row.getStr("name"))) + "</loc>";
-        const String updated = row.getStr("updated_at");
-        xml += "<lastmod>" + head(updated, 10l) + "</lastmod></url>";
-    }
-    xml += "</urlset>";
-    return ctx.respond(200, "application/xml; charset=utf-8", xml);
+    View view;
+    view.text("base_url", ctx.config.baseUrl);
+    view.bind("rows", rows);
+    return ctx.respond(200, "application/xml; charset=utf-8", renderTemplate("feeds/sitemap", view));
 }
 
 public f<String> handleOpenSearch(Ctx& ctx) {
-    String xml = String("<?xml version=\"1.0\" encoding=\"UTF-8\"?><OpenSearchDescription xmlns=\"http://a9.com/-/spec/opensearch/1.1/\">");
-    xml += "<ShortName>Spice Rack</ShortName><Description>Search Spice packages</Description>";
-    xml += "<Url type=\"text/html\" template=\"" + esc(ctx.config.baseUrl) + "/packages?q={searchTerms}\"/></OpenSearchDescription>";
-    return ctx.respond(200, "application/opensearchdescription+xml; charset=utf-8", xml);
+    View view;
+    view.text("base_url", ctx.config.baseUrl);
+    return ctx.respond(200, "application/opensearchdescription+xml; charset=utf-8", renderTemplate("feeds/opensearch", view));
 }

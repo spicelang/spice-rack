@@ -1,0 +1,48 @@
+<div class="page-title"><div class="container">
+    <h1>{% if q %}Results for &ldquo;{{ q }}&rdquo;{% elif owner %}Packages by {{ owner }}{% else %}All packages{% endif %}</h1>
+    <p class="muted">{{ total|thousands }}{% if single %} package{% else %} packages{% endif %} found</p>
+</div></div>
+<div class="container search-layout">
+    <aside class="filters">
+        <form action="/packages" method="get" class="filter-form">
+            <label for="q">Search</label><input id="q" type="search" name="q" value="{{ q }}" placeholder="Name, description or tag">
+            <label for="sort">Sort by</label>
+            <select id="sort" name="sort">
+                <option value="relevance"{% if sort == "relevance" %} selected{% endif %}>Relevance</option>
+                <option value="downloads"{% if sort == "downloads" %} selected{% endif %}>Most downloaded</option>
+                <option value="updated"{% if sort == "updated" %} selected{% endif %}>Recently updated</option>
+                <option value="newest"{% if sort == "newest" %} selected{% endif %}>Newest</option>
+                <option value="stars"{% if sort == "stars" %} selected{% endif %}>Most starred</option>
+                <option value="name"{% if sort == "name" %} selected{% endif %}>Name (A-Z)</option>
+            </select>
+            {% for t in active_tags %}<input type="hidden" name="tag" value="{{ t }}">{% endfor %}
+            {% if owner %}<input type="hidden" name="owner" value="{{ owner }}">{% endif %}
+            <button class="btn btn-primary btn-block" type="submit">Apply</button>
+        </form>
+        {% if filters or q %}
+        <h2>Active filters</h2>
+        <ul class="tags">
+            {% for f in filters %}<li><a class="tag tag-active" href="/packages?{{ f.query }}" title="Remove filter">{{ f.label }} &times;</a></li>{% endfor %}
+        </ul>
+        <p><a href="/packages">Clear all</a></p>
+        {% endif %}
+        <h2>Popular tags</h2>
+        {% if popular %}
+        <ul class="tags">
+            {% for t in popular %}<li><a class="tag" href="/packages?{{ t.query }}">{{ t.tag }} <span class="tag-count">{{ t.packages }}</span></a></li>{% endfor %}
+        </ul>
+        {% else %}
+        <p class="muted small">No tags yet.</p>
+        {% endif %}
+    </aside>
+    <section class="results">
+        {% if results %}
+        <ul class="card-list">
+            {% for r in results %}{% include "partials/package-card" with pkg=r %}{% endfor %}
+        </ul>
+        {% include "partials/pagination" %}
+        {% else %}
+        <div class="empty"><p><strong>No packages found.</strong></p><p class="muted">Try a different search term or remove some filters.</p></div>
+        {% endif %}
+    </section>
+</div>

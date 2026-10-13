@@ -1,0 +1,33 @@
+<aside class="sidebar">
+    {% if pkg.latest_version %}
+    <section class="side-block">
+        <h2>Use this package</h2>
+        <p class="muted small">Add it to the <code>dependencies</code> of your <code>spice.json</code>:</p>
+        <pre class="code"><code>"{{ pkg.name }}": "^{{ caret_version }}"</code></pre>
+        <p><a class="btn btn-block" href="/api/v1/packages/{{ pkg.name|url }}/versions/{{ pkg.latest_version|url }}/download">{% include "icons/download" %}Download v{{ pkg.latest_version }}</a></p>
+    </section>
+    {% endif %}
+    <section class="side-block">
+        <h2>About</h2>
+        <dl class="facts">
+            {% if pkg.latest_version %}<dt>Latest version</dt><dd>v{{ pkg.latest_version }}</dd><dt>Published</dt><dd>{{ pkg.latest_published|date }}</dd>{% endif %}
+            <dt>Downloads</dt><dd>{{ pkg.downloads_total|thousands }}</dd>
+            <dt>GitHub stars</dt><dd>{{ pkg.stars|thousands }}</dd>
+            {% if pkg.license %}<dt>License</dt><dd>{{ pkg.license }}</dd>{% endif %}
+            <dt>Maintainer</dt><dd><a href="/packages?owner={{ pkg.owner_login|url }}">{{ pkg.owner_login }}</a></dd>
+            <dt>Registered</dt><dd>{{ pkg.created_at|date }}</dd>
+        </dl>
+    </section>
+    <section class="side-block">
+        <h2>Links</h2>
+        <ul class="plain-list">
+            <li><a href="https://github.com/{{ pkg.repo_owner|url }}/{{ pkg.repo_name|url }}" rel="noopener">{% include "icons/github" %}Repository</a></li>
+            {% if homepage_ok %}<li><a href="{{ pkg.homepage }}" rel="noopener nofollow">Homepage</a></li>{% endif %}
+            <li><a href="https://github.com/{{ pkg.repo_owner|url }}/{{ pkg.repo_name|url }}/issues" rel="noopener">Issues</a></li>
+            <li><a href="/api/v1/packages/{{ pkg.name|url }}">JSON metadata</a></li>
+        </ul>
+    </section>
+    {% if can_manage %}
+    <section class="side-block"><a class="btn btn-block" href="/dashboard/packages/{{ pkg.name|url }}">Manage package</a></section>
+    {% endif %}
+</aside>

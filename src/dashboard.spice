@@ -3,28 +3,13 @@ import "./util";
 import "./json";
 import "./core";
 import "./layout";
+import "./template";
 import "./github";
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Maintainer area: dashboard, creating packages and managing them.
 // The package forms are shared with the admin area, which has a few extra fields (name, repository, maintainer).
 // ---------------------------------------------------------------------------------------------------------------------
-
-public f<String> formField(const String& label, const String& name, const String& value, const String& hint, bool required = false, bool readonly = false, const String& placeholder = String("")) {
-    String h = String("<div class=\"field\"><label for=\"f-") + name + "\">" + esc(label) + (required ? " <span class=\"req\" title=\"required\">*</span>" : "") + "</label>";
-    h += "<input id=\"f-" + name + "\" name=\"" + name + "\" type=\"text\" value=\"" + esc(value) + "\"" + (required ? " required" : "") + (readonly ? " readonly" : "");
-    h += placeholder.isEmpty() ? String("") : String(" placeholder=\"") + esc(placeholder) + "\"";
-    h += " autocomplete=\"off\">";
-    if !hint.isEmpty() { h += "<p class=\"hint\">" + esc(hint) + "</p>"; }
-    return h + "</div>";
-}
-
-public f<String> errorList(const Vector<String>& errors) {
-    if errors.getSize() == 0l { return String(""); }
-    String h = String("<div class=\"notice notice-err\" role=\"alert\"><ul>");
-    for unsigned long i = 0l; i < errors.getSize(); i++ { h += "<li>" + esc(errors.get(i)) + "</li>"; }
-    return h + "</ul></div>";
-}
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Dashboard
@@ -64,34 +49,13 @@ public f<String> handleDashboard(Ctx& ctx) {
         values.pushBack(day.getNum("downloads"));
     }
 
-    String h = String("<div class=\"page-title\"><div class=\"container title-flex\"><div><h1>Dashboard</h1><p class=\"muted\">Signed in as <strong>");
-    h += esc(ctx.user.login) + "</strong> &middot; " + esc(ctx.user.role) + "</p></div>";
-    h += "<a class=\"btn btn-primary\" href=\"/dashboard/packages/new\">New package</a></div></div>";
-    h += "<div class=\"container section\"><div class=\"tiles\">";
-    h += "<div class=\"tile\"><span class=\"tile-value\">" + fmtThousands(cast<long>(packages.size())) + "</span><span class=\"tile-label\">Packages</span></div>";
-    h += "<div class=\"tile\"><span class=\"tile-value\">" + fmtThousands(totalDownloads) + "</span><span class=\"tile-label\">Downloads, all time</span></div>";
-    h += "<div class=\"tile\"><span class=\"tile-value\">" + fmtThousands(downloads30) + "</span><span class=\"tile-label\">Downloads, last 30 days</span></div></div>";
-    if packages.size() == 0l {
-        h += "<div class=\"empty\"><p><strong>You have not published a package yet.</strong></p>";
-        h += "<p class=\"muted\">Tag a release on GitHub, then add the repository to the registry.</p>";
-        h += "<p><a class=\"btn btn-primary\" href=\"/dashboard/packages/new\">Create your first package</a> <a class=\"btn\" href=\"/docs/publishing\">Publishing guide</a></p></div>";
-    } else {
-        h += "<section class=\"panel\">" + barChart(String("Downloads of your packages (last 30 days)"), labels, values, String("downloads")) + "</section>";
-        h += "<section class=\"panel\"><h2>Your packages</h2><div class=\"table-wrap\"><table class=\"table\"><thead><tr><th>Package</th><th>Latest</th><th class=\"num\">Downloads</th><th class=\"num\">30 days</th><th class=\"num\">Views (30d)</th><th>Last sync</th><th></th></tr></thead><tbody>";
-        for JV pk = packages.first(); pk.exists(); pk = pk.after() {
-            const String name = pk.getStr("name");
-            const String version = pk.getStr("latest_version");
-            h += "<tr><td><a href=\"/packages/" + urlEncode(name) + "\"><strong>" + esc(name) + "</strong></a><div class=\"muted small\">" + esc(pk.getStr("description")) + "</div></td>";
-            h += "<td>" + (version.isEmpty() ? String("&ndash;") : "v" + esc(version)) + "</td>";
-            h += "<td class=\"num\">" + fmtThousands(pk.getNum("downloads_total")) + "</td><td class=\"num\">" + fmtThousands(pk.getNum("d30")) + "</td><td class=\"num\">" + fmtThousands(pk.getNum("v30")) + "</td>";
-            const String synced = pk.getStr("synced_at");
-            h += "<td>" + (synced.isEmpty() ? String("never") : fmtDate(synced)) + "</td>";
-            h += "<td class=\"actions\"><a class=\"btn btn-small\" href=\"/dashboard/packages/" + urlEncode(name) + "\">Manage</a></td></tr>";
-        }
-        h += "</tbody></table></div></section>";
-    }
-    h += "</div>";
-    return ctx.html(200, layoutPage(ctx, String("Dashboard"), String("Manage your Spice packages."), h));
+    View view;
+    view.bind("packages", packages);
+    view.text("package_count", fmtLong(cast<long>(packages.size())));
+    view.text("downloads_total", fmtLong(totalDownloads));
+    view.text("downloads_30d", fmtLong(downloads30));
+    view.json("chart", chartJson(String("Downloads of your packages (last 30 days)"), labels, values, String("downloads")));
+    return ctx.html(200, renderPage(ctx, "pages/dashboard", String("Dashboard"), String("Manage your Spice packages."), view));
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -129,34 +93,41 @@ f<String> suggestName(const String& repo) {
 }
 
 f<String> renderCreateForm(const Ctx& ctx, bool adminMode, JV repos, JV taken, const Vector<String>& errors) {
-    String h = String("<div class=\"page-title\"><div class=\"container\"><h1>New package</h1><p class=\"muted\">Register a GitHub repository as a package. Releases with semantic version tags become its versions.</p></div></div>");
-    h += "<div class=\"container narrow section\">" + errorList(errors);
-    h += "<form class=\"form panel\" method=\"post\" action=\"" + area(adminMode) + "/new\">" + csrfField(ctx);
-
-    if !adminMode {
-        h += "<div class=\"field\"><label for=\"f-repo-select\">Your repositories</label><select id=\"f-repo-select\" name=\"repo_select\"><option value=\"\">Choose a repository&hellip;</option>";
-        for JV r = repos.first(); r.exists(); r = r.after() {
-            const String full = r.getStr("full_name");
-            bool isTaken = false;
-            for JV t = taken.first(); t.exists(); t = t.after() {
-                if lower(t.getStr("repo_owner") + "/" + t.getStr("repo_name")) == lower(full) { isTaken = true; }
-            }
-            if isTaken || r.getBool("fork") || r.getBool("archived") { continue; }
-            h += String("<option value=\"") + esc(full) + "\"" + (ctx.form.get("repo_select") == full ? " selected" : "") + ">" + esc(full) + "</option>";
+    // Only repositories that can still be added are offered
+    JsonWriter options;
+    options.beginArray();
+    for JV r = repos.first(); r.exists(); r = r.after() {
+        const String full = r.getStr("full_name");
+        bool isTaken = false;
+        for JV t = taken.first(); t.exists(); t = t.after() {
+            if lower(t.getStr("repo_owner") + "/" + t.getStr("repo_name")) == lower(full) { isTaken = true; }
         }
-        h += "</select><p class=\"hint\">Public, non-fork, non-archived repositories you own that are not yet on the registry.</p></div>";
+        if isTaken || r.getBool("fork") || r.getBool("archived") { continue; }
+        options.beginObject();
+        options.kStr("name", full);
+        options.kBool("selected", ctx.form.get("repo_select") == full);
+        options.endObject();
     }
-    h += formField(String(adminMode ? "Repository" : "Or enter a repository manually"), String("repo"), ctx.form.get("repo"),
-                   String("owner/name, e.g. spicelang/spice. You need push access to it") , adminMode, false, String("owner/name"));
-    if adminMode {
-        h += formField(String("Maintainer (GitHub login)"), String("maintainer"), ctx.form.get("maintainer"), String("The user must have signed in to the registry before."), true);
-    }
-    h += formField(String("Package name"), String("name"), ctx.form.get("name"), String("Lowercase letters, digits, - _ and . (2-64 characters). Leave empty to use the repository name."));
-    h += formField(String("Description"), String("description"), ctx.form.get("description"), String("One short sentence. Leave empty to use the GitHub description."));
-    h += formField(String("Tags"), String("tags"), ctx.form.get("tags"), String("Comma separated, up to 8, e.g. json, parser, web"));
-    h += formField(String("Homepage"), String("homepage"), ctx.form.get("homepage"), String("Optional. Defaults to the homepage from GitHub."));
-    h += "<div class=\"form-actions\"><button class=\"btn btn-primary\" type=\"submit\">Create package</button><a class=\"btn btn-ghost\" href=\"" + String(adminMode ? "/admin/packages" : "/dashboard") + "\">Cancel</a></div></form></div>";
-    return layoutPage(ctx, String("New package"), String("Create a package"), h);
+    options.endArray();
+
+    JsonWriter form;
+    form.beginObject();
+    form.kStr("repo", ctx.form.get("repo"));
+    form.kStr("maintainer", ctx.form.get("maintainer"));
+    form.kStr("name", ctx.form.get("name"));
+    form.kStr("description", ctx.form.get("description"));
+    form.kStr("tags", ctx.form.get("tags"));
+    form.kStr("homepage", ctx.form.get("homepage"));
+    form.endObject();
+
+    View view;
+    view.flag("admin_mode", adminMode);
+    view.text("area", area(adminMode));
+    view.text("cancel_url", adminMode ? String("/admin/packages") : String("/dashboard"));
+    view.list("errors", errors);
+    view.json("repos", options.finish());
+    view.json("form", form.finish());
+    return renderPage(ctx, "pages/package-new", String("New package"), String("Create a package"), view);
 }
 
 /**
@@ -320,40 +291,25 @@ public f<String> handleCreatePackage(Ctx& ctx, bool adminMode) {
 
 f<String> renderManageForm(const Ctx& ctx, bool adminMode, JV pkg, const Vector<String>& errors) {
     const String name = pkg.getStr("name");
+    // After a failed save the form shows what was typed, otherwise the current values
     const bool posted = ctx.isPost() && ctx.form.get("action") == "save";
-    const String description = posted ? ctx.form.get("description") : pkg.getStr("description");
-    const String homepage = posted ? ctx.form.get("homepage") : pkg.getStr("homepage");
-    const String tags = posted ? ctx.form.get("tags") : pkg.getStr("tags");
-    const String base = area(adminMode) + "/" + urlEncode(name);
+    JsonWriter form;
+    form.beginObject();
+    form.kStr("name", posted ? ctx.form.get("name") : name);
+    form.kStr("repo", posted ? ctx.form.get("repo") : pkg.getStr("repo_owner") + "/" + pkg.getStr("repo_name"));
+    form.kStr("maintainer", posted ? ctx.form.get("maintainer") : pkg.getStr("owner_login"));
+    form.kStr("description", posted ? ctx.form.get("description") : pkg.getStr("description"));
+    form.kStr("tags", posted ? ctx.form.get("tags") : pkg.getStr("tags"));
+    form.kStr("homepage", posted ? ctx.form.get("homepage") : pkg.getStr("homepage"));
+    form.endObject();
 
-    String h = String("<div class=\"page-title\"><div class=\"container title-flex\"><div><h1>Manage ") + esc(name) + "</h1>";
-    h += "<p class=\"muted\">Maintained by " + esc(pkg.getStr("owner_login")) + " &middot; repository " + esc(pkg.getStr("repo_owner")) + "/" + esc(pkg.getStr("repo_name")) + "</p></div>";
-    h += "<a class=\"btn\" href=\"/packages/" + urlEncode(name) + "\">View public page</a></div></div>";
-    h += "<div class=\"container narrow section\">" + errorList(errors);
-
-    h += "<form class=\"form panel\" method=\"post\" action=\"" + base + "\">" + csrfField(ctx) + "<input type=\"hidden\" name=\"action\" value=\"save\"><h2>Details</h2>";
-    if adminMode {
-        h += formField(String("Package name"), String("name"), posted ? ctx.form.get("name") : name, String("Renaming breaks existing references to the package."), true);
-        h += formField(String("Repository"), String("repo"), posted ? ctx.form.get("repo") : pkg.getStr("repo_owner") + "/" + pkg.getStr("repo_name"), String("owner/name"), true);
-        h += formField(String("Maintainer (GitHub login)"), String("maintainer"), posted ? ctx.form.get("maintainer") : pkg.getStr("owner_login"), String(""), true);
-    } else {
-        h += formField(String("Package name"), String("name"), name, String("The name cannot be changed. Ask an administrator if you need a different one."), false, true);
-    }
-    h += formField(String("Description"), String("description"), description, String("One short sentence."));
-    h += formField(String("Tags"), String("tags"), tags, String("Comma separated, up to 8."));
-    h += formField(String("Homepage"), String("homepage"), homepage, String("Optional http(s) URL."));
-    h += "<div class=\"form-actions\"><button class=\"btn btn-primary\" type=\"submit\">Save changes</button></div></form>";
-
-    h += "<section class=\"panel\"><h2>Sync with GitHub</h2><p class=\"muted\">README, releases and dependencies are refreshed automatically. Use this after publishing a release. Last sync: ";
-    const String synced = pkg.getStr("synced_at");
-    h += (synced.isEmpty() ? String("never") : fmtDateTime(synced)) + ".</p>";
-    h += "<form method=\"post\" action=\"" + base + "\">" + csrfField(ctx) + "<input type=\"hidden\" name=\"action\" value=\"sync\"><button class=\"btn\" type=\"submit\">Sync now</button></form></section>";
-
-    h += "<section class=\"panel danger-zone\"><h2>Delete package</h2><p class=\"muted\">This removes the package, all of its versions and its statistics from the registry. Your GitHub repository is not touched. This cannot be undone.</p>";
-    h += "<form class=\"form\" method=\"post\" action=\"" + base + "\">" + csrfField(ctx) + "<input type=\"hidden\" name=\"action\" value=\"delete\">";
-    h += formField(String("Type the package name to confirm"), String("confirm"), String(""), String(""), true, false, name);
-    h += "<div class=\"form-actions\"><button class=\"btn btn-danger\" type=\"submit\">Delete this package</button></div></form></section></div>";
-    return layoutPage(ctx, String("Manage ") + name, String("Manage a package"), h);
+    View view;
+    view.bind("pkg", pkg);
+    view.flag("admin_mode", adminMode);
+    view.text("base", area(adminMode) + "/" + urlEncode(name));
+    view.list("errors", errors);
+    view.json("form", form.finish());
+    return renderPage(ctx, "pages/package-manage", String("Manage ") + name, String("Manage a package"), view);
 }
 
 /**

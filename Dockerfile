@@ -23,12 +23,14 @@ ENV NODE_ENV=production \
     PORT=8080 \
     WASM_PATH=/app/rack.wasm \
     PUBLIC_DIR=/app/public \
+    TEMPLATES_DIR=/app/templates \
     MIGRATIONS_DIR=/app/db/migrations
 WORKDIR /app/host
 COPY host/package.json host/package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
 COPY host/*.mjs ./
 COPY public /app/public
+COPY templates /app/templates
 COPY db/migrations /app/db/migrations
 COPY --from=wasm /out/rack.wasm /app/rack.wasm
 USER node

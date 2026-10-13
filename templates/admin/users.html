@@ -1,0 +1,39 @@
+<div class="page-title"><div class="container"><h1>Maintainers</h1><p class="muted">{{ total|thousands }} accounts</p></div></div>
+{% include "admin/nav" with active="users" %}
+<div class="container section">
+    <form class="toolbar" method="get" action="/admin/users"><label class="sr-only" for="uq">Search</label><input id="uq" type="search" name="q" value="{{ q }}" placeholder="Search by login or name"><button class="btn" type="submit">Search</button></form>
+    <div class="table-wrap"><table class="table">
+        <thead><tr><th>Account</th><th>Role</th><th>Status</th><th class="num">Packages</th><th>Joined</th><th>Last sign-in</th><th>Actions</th></tr></thead>
+        <tbody>
+            {% for u in users %}
+            <tr>
+                <td>{% include "partials/avatar" with login=u.login size="24" %} <a href="/packages?owner={{ u.login|url }}"><strong>{{ u.login }}</strong></a><div class="muted small">{{ u.display_name }}</div></td>
+                <td><span class="badge {% if u.role == "admin" %}badge-ok{% endif %}">{{ u.role }}</span></td>
+                <td><span class="badge {% if u.status == "suspended" %}badge-warn{% endif %}">{{ u.status }}</span></td>
+                <td class="num">{{ u.packages }}</td><td>{{ u.created_at|date }}</td><td>{{ u.last_login_at|date }}</td>
+                <td class="actions">
+                    {% if u.id == user.id %}
+                    <span class="muted small">this is you</span>
+                    {% else %}
+                    {% if u.role == "admin" %}
+                    {% include "admin/user-action" with id=u.id part="role" field="role" value="maintainer" label="Make maintainer" %}
+                    {% else %}
+                    {% include "admin/user-action" with id=u.id part="role" field="role" value="admin" label="Make admin" %}
+                    {% endif %}
+                    {% if u.status == "suspended" %}
+                    {% include "admin/user-action" with id=u.id part="status" field="status" value="active" label="Reactivate" %}
+                    {% else %}
+                    {% include "admin/user-action" with id=u.id part="status" field="status" value="suspended" label="Suspend" %}
+                    {% endif %}
+                    {% include "admin/user-action" with id=u.id part="delete" field="confirm" value="yes" label="Delete" class="btn-danger" confirm="yes" %}
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="7" class="muted">No accounts found.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table></div>
+    {% include "partials/pagination" %}
+    <p class="muted small">Suspending an account signs the user out and blocks new sign-ins; their packages stay online. Deleting an account also deletes all of its packages.</p>
+</div>

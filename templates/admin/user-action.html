@@ -1,0 +1,1 @@
+<form class="inline-form" method="post" action="/admin/users/{{ id }}/{{ part }}">{% include "partials/csrf" %}<input type="hidden" name="{{ field }}" value="{{ value }}">{% if confirm %}<input type="hidden" name="confirm" value="yes">{% endif %}<button class="btn btn-small {{ class }}" type="submit">{{ label }}</button></form>

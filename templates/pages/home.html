@@ -1,0 +1,27 @@
+<section class="hero"><div class="container hero-inner">
+    <h1>Find and share <span class="accent">Spice</span> packages</h1>
+    <p class="lead">The community registry for the Spice programming language. Search libraries, read their docs, inspect dependencies and publish your own.</p>
+    <form class="hero-search" action="/packages" method="get" role="search">
+        <label class="sr-only" for="hero-q">Search packages</label>
+        <input id="hero-q" type="search" name="q" placeholder="Search packages, e.g. json, http, cli" autocomplete="off"><button class="btn btn-primary" type="submit">Search</button>
+    </form>
+    <ul class="hero-stats">
+        <li><strong>{{ stats.packages|thousands }}</strong> packages</li>
+        <li><strong>{{ stats.downloads|thousands }}</strong> downloads</li>
+        <li><strong>{{ stats.maintainers|thousands }}</strong> maintainers</li>
+    </ul>
+    {% if tags %}
+    <ul class="tags hero-tags">
+        {% for t in tags %}<li>{% include "partials/tag-link" with tag=t.tag %}</li>{% endfor %}
+    </ul>
+    {% endif %}
+</div></section>
+<div class="container section"><div class="columns-3">
+    <section><h2>Most downloaded</h2>{% include "partials/mini-list" with rows=top metric="downloads" %}<p><a href="/packages?sort=downloads">Browse all &rarr;</a></p></section>
+    <section><h2>Recently updated</h2>{% include "partials/mini-list" with rows=updated metric="updated" %}<p><a href="/packages?sort=updated">See more &rarr;</a></p></section>
+    <section><h2>New packages</h2>{% include "partials/mini-list" with rows=fresh metric="created" %}<p><a href="/packages?sort=newest">See more &rarr;</a></p></section>
+</div></div>
+<section class="cta"><div class="container cta-inner">
+    <div><h2>Got a package to share?</h2><p class="muted">Sign in with GitHub, point the registry at your repository and tag a release. That is all it takes.</p></div>
+    <a class="btn btn-primary" href="/docs/publishing">Read the publishing guide</a>
+</div></section>

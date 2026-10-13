@@ -1,0 +1,30 @@
+<div class="tiles">
+    {% include "partials/tile" with value=pkg.downloads_total|thousands label="Downloads, all time" %}
+    {% include "partials/tile" with value=totals.downloads_30d|thousands label="Downloads, last 30 days" %}
+    {% include "partials/tile" with value=totals.views_30d|thousands label="Page views, last 30 days" %}
+    {% include "partials/tile" with value=pkg.dependents|thousands label="Packages depending on it" %}
+    {% include "partials/tile" with value=pkg.stars|thousands label="GitHub stars" %}
+</div>
+<section class="panel">{% include "partials/bar-chart" with chart=downloads_chart %}</section>
+<section class="panel">{% include "partials/bar-chart" with chart=views_chart %}</section>
+<section class="panel">
+    <h2>Downloads by version</h2>
+    {% if version_stats %}
+    <table class="table">
+        <thead><tr><th>Version</th><th>Released</th><th class="num">Downloads</th><th class="bar-cell"></th></tr></thead>
+        <tbody>
+            {% for v in version_stats %}
+            <tr>
+                <td><a href="/packages/{{ pkg.name|url }}?tab=versions#v{{ v.version }}">v{{ v.version }}</a></td>
+                <td>{{ v.published_at|date }}</td>
+                <td class="num">{{ v.downloads|thousands }}</td>
+                <td class="bar-cell"><span class="inline-bar" style="width:{{ v.width }}%"></span></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No releases yet.</p>
+    {% endif %}
+</section>
+<p class="muted small">Downloads are counted when a version archive is fetched through the registry API. Page views exclude well-known bots.</p>

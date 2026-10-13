@@ -1,0 +1,41 @@
+<div class="container narrow section prose">
+    <h1>Publishing a package</h1>
+    <p class="lead">A package on the registry is a GitHub repository. Releases of the repository are the versions of the package.</p>
+    <ol class="steps">
+        <li><h2>Sign in</h2><p><a href="/auth/github">Sign in with GitHub</a>. The registry only asks for your public profile.</p></li>
+        <li><h2>Describe your dependencies</h2><p>Add a <code>spice.json</code> file to the root of your repository. It is optional, but needed for the dependency tree:</p>
+<pre class="code"><code>{
+  "name": "my-package",
+  "dependencies": {
+    "json-parser": "^1.2.0",
+    "http-client": "&gt;=2.0.0, &lt;3.0.0"
+  },
+  "devDependencies": {
+    "test-kit": "*"
+  }
+}</code></pre></li>
+        <li><h2>Tag a release</h2><p>Create a GitHub release whose tag is a <a href="https://semver.org" rel="noopener">semantic version</a>, for example <code>v1.0.0</code>. The release notes become the changelog. Tags that are not semantic versions are ignored.</p></li>
+        <li><h2>Create the package</h2><p>Open the <a href="/dashboard/packages/new">dashboard</a>, pick your repository and choose a name and a few tags. You need push access to the repository.</p></li>
+        <li><h2>Keep it in sync</h2><p>The registry re-reads README, releases and dependencies regularly. After a release you can also hit <em>Sync now</em> on the package management page.</p></li>
+    </ol>
+    <h2>Version constraints</h2>
+    <table class="table">
+        <thead><tr><th>Constraint</th><th>Matches</th></tr></thead>
+        <tbody>
+            <tr><td><code>1.2.3</code></td><td>exactly 1.2.3</td></tr>
+            <tr><td><code>^1.2.3</code></td><td>1.2.3 up to, but excluding 2.0.0</td></tr>
+            <tr><td><code>~1.2.3</code></td><td>1.2.3 up to, but excluding 1.3.0</td></tr>
+            <tr><td><code>1.2.x</code></td><td>any 1.2 release</td></tr>
+            <tr><td><code>&gt;=1.0.0, &lt;2.0.0</code></td><td>a range</td></tr>
+            <tr><td><code>*</code></td><td>any version</td></tr>
+        </tbody>
+    </table>
+    <h2>Using the registry API</h2>
+    <p>Everything on this site is available as JSON, for tools that want to resolve and fetch packages:</p>
+    <ul>
+        <li><code>GET /api/v1/packages?q=json&amp;tag=parser&amp;sort=downloads</code></li>
+        <li><code>GET /api/v1/packages/{name}</code></li>
+        <li><code>GET /api/v1/packages/{name}/versions/{version}</code> (use <code>latest</code> for the newest release)</li>
+        <li><code>GET /api/v1/packages/{name}/versions/{version}/download</code> counts the download and redirects to the archive</li>
+    </ul>
+</div>

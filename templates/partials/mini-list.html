@@ -1,0 +1,12 @@
+{% if rows %}
+<ol class="mini-list">
+    {% for row in rows %}
+    <li>
+        <a href="/packages/{{ row.name|url }}"><span class="mini-name">{{ row.name }}</span><span class="mini-desc">{{ row.description }}</span></a>
+        <span class="mini-metric">{% if metric == "downloads" %}{{ row.downloads_total|count }} downloads{% elif metric == "updated" %}{{ row.updated_at|date }}{% else %}{{ row.created_at|date }}{% endif %}</span>
+    </li>
+    {% endfor %}
+</ol>
+{% else %}
+<p class="muted">Nothing here yet.</p>
+{% endif %}

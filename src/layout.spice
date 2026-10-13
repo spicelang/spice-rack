@@ -2,100 +2,25 @@ import "std/data/vector";
 import "./util";
 import "./json";
 import "./core";
+import "./template";
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Page shell and small reusable UI pieces. The whole UI is rendered on the server without any client-side script.
+// Page shell. The markup of every page lives in templates/ (see template.spice); this file prepares what the shell of
+// each page needs (user, menu, notices) and offers the data helpers of the shared components. The whole UI is rendered
+// on the server without any client-side script.
 // ---------------------------------------------------------------------------------------------------------------------
 
 public const string SITE_NAME = "Spice Rack";
 
-public const string GITHUB_MARK = "M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12";
-
 // ---------------------------------------------------------------------------------------------------------------------
-// Icons
+// Rendering
 // ---------------------------------------------------------------------------------------------------------------------
-
-public f<String> iconGithub() {
-    return String("<svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path fill=\"currentColor\" d=\"") + GITHUB_MARK + "\"/></svg>";
-}
-
-public f<String> iconDownload() {
-    return String("<svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 3v12m0 0l-4.5-4.5M12 15l4.5-4.5M4 19h16\"/></svg>");
-}
-
-public f<String> iconStar() {
-    return String("<svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1 5.9L12 16.9l-5.2 2.8 1-5.9-4.3-4.1 5.9-.8z\"/></svg>");
-}
-
-public f<String> iconClock() {
-    return String("<svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"8.5\"/><path d=\"M12 7.5V12l3 2\"/></svg>");
-}
-
-public f<String> iconUser() {
-    return String("<svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"8\" r=\"3.5\"/><path d=\"M5 20c.8-3.6 3.6-5.5 7-5.5s6.2 1.9 7 5.5\"/></svg>");
-}
-
-public f<String> iconSearch() {
-    return String("<svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><circle cx=\"10.5\" cy=\"10.5\" r=\"6\"/><path d=\"M15 15l5 5\"/></svg>");
-}
-
-public f<String> brandMark() {
-    return String("<img class=\"brand-mark\" src=\"/static/logo.png\" alt=\"\" width=\"28\" height=\"28\">");
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
-// Shell
-// ---------------------------------------------------------------------------------------------------------------------
-
-public f<String> avatarUrl(const String& login) {
-    return String("https://github.com/") + urlEncode(login) + ".png?size=64";
-}
-
-f<String> navLink(const Ctx& ctx, string href, string label, string activePrefix) {
-    String cls = String("nav-link");
-    if ctx.path.startsWith(activePrefix) { cls += " active"; }
-    return String("<a class=\"") + cls + "\" href=\"" + href + "\">" + label + "</a>";
-}
-
-public f<String> renderHeader(const Ctx& ctx) {
-    String h = String("<header class=\"site-header\"><div class=\"container header-inner\">");
-    h += "<a class=\"brand\" href=\"/\">" + brandMark() + "<span>" + SITE_NAME + "</span></a>";
-    h += "<form class=\"header-search\" action=\"/packages\" method=\"get\" role=\"search\">";
-    h += "<label class=\"sr-only\" for=\"header-q\">Search packages</label>";
-    h += iconSearch() + "<input id=\"header-q\" type=\"search\" name=\"q\" placeholder=\"Search packages\" autocomplete=\"off\"></form>";
-    h += "<nav class=\"main-nav\" aria-label=\"Main\">";
-    h += navLink(ctx, "/packages", "Packages", "/packages");
-    h += navLink(ctx, "/docs/publishing", "Publish", "/docs");
-    if ctx.user.present {
-        h += navLink(ctx, "/dashboard", "Dashboard", "/dashboard");
-        if ctx.isAdmin() { h += navLink(ctx, "/admin", "Admin", "/admin"); }
-        h += "<form class=\"inline-form user-menu\" action=\"/logout\" method=\"post\">";
-        h += "<input type=\"hidden\" name=\"csrf\" value=\"" + esc(ctx.user.csrf) + "\">";
-        h += "<img class=\"avatar\" src=\"" + esc(avatarUrl(ctx.user.login)) + "\" alt=\"\" width=\"28\" height=\"28\">";
-        h += "<span class=\"user-login\">" + esc(ctx.user.login) + "</span>";
-        h += "<button class=\"btn btn-ghost btn-small\" type=\"submit\">Sign out</button></form>";
-    } else {
-        h += "<a class=\"btn btn-primary btn-small\" href=\"/auth/github\">" + iconGithub() + "Sign in</a>";
-    }
-    h += "</nav></div></header>";
-    return h;
-}
-
-public f<String> renderFooter() {
-    String h = String("<footer class=\"site-footer\"><div class=\"container footer-inner\">");
-    h += "<span>" + brandMark() + " " + SITE_NAME + " &middot; the package registry for the ";
-    h += "<a href=\"https://spicelang.com\" rel=\"noopener\">Spice</a> programming language</span>";
-    h += "<span class=\"footer-links\"><a href=\"/docs/publishing\">Publishing guide</a>";
-    h += "<a href=\"/api/v1/packages\">API</a>";
-    h += "<a href=\"https://github.com/spicelang/spice\" rel=\"noopener\">GitHub</a></span>";
-    h += "</div></footer>";
-    return h;
-}
 
 /**
  * Translate the notice codes of the query string to messages. Free text from the URL is never reflected.
+ * Returns the JSON for the template (`kind` is a CSS class), or an empty string if there is nothing to show.
  */
-public f<String> renderNotice(const Ctx& ctx) {
+f<String> noticeJson(const Ctx& ctx) {
     const String notice = ctx.query.get("notice");
     const String error = ctx.query.get("error");
     String message;
@@ -111,38 +36,63 @@ public f<String> renderNotice(const Ctx& ctx) {
     else if error == "suspended" { message = String("This account is suspended."); kind = String("notice-err"); }
     else if error == "github" { message = String("GitHub could not be reached. Please try again in a moment."); kind = String("notice-err"); }
     if message.isEmpty() { return String(""); }
-    return String("<div class=\"container\"><p class=\"notice ") + kind + "\" role=\"status\">" + message + "</p></div>";
+    JsonWriter w;
+    w.beginObject();
+    w.kStr("kind", kind);
+    w.kStr("message", message);
+    w.endObject();
+    return w.finish();
 }
 
 /**
- * Wrap content in the complete HTML document
+ * What the shell of every page needs besides the page's own data: the signed-in user, the active menu entry, a notice
  */
-public f<String> layoutPage(const Ctx& ctx, const String& title, const String& description, const String& content) {
-    String h = String("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">");
-    h += "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
-    h += "<meta name=\"color-scheme\" content=\"light dark\">";
-    h += "<title>" + esc(title) + " · " + SITE_NAME + "</title>";
-    h += "<meta name=\"description\" content=\"" + esc(description) + "\">";
-    h += "<link rel=\"icon\" href=\"/static/favicon.ico\" sizes=\"96x96\">";
-    h += "<link rel=\"icon\" href=\"/static/favicon-32x32.png\" type=\"image/png\" sizes=\"32x32\">";
-    h += "<link rel=\"icon\" href=\"/static/favicon-16x16.png\" type=\"image/png\" sizes=\"16x16\">";
-    h += "<link rel=\"stylesheet\" href=\"/static/style.css\">";
-    h += "<link rel=\"search\" type=\"application/opensearchdescription+xml\" title=\"Spice Rack\" href=\"/opensearch.xml\">";
-    h += "</head><body>";
-    h += "<a class=\"skip-link\" href=\"#main\">Skip to content</a>";
-    h += renderHeader(ctx);
-    h += renderNotice(ctx);
-    h += "<main id=\"main\">" + content + "</main>";
-    h += renderFooter();
-    h += "</body></html>";
-    return h;
+p bindShell(const Ctx& ctx, View& view) {
+    view.text("site_name", String(SITE_NAME));
+    view.text("csrf", ctx.user.csrf);
+
+    JsonWriter user;
+    user.beginObject();
+    user.kBool("present", ctx.user.present);
+    user.kNum("id", ctx.user.id);
+    user.kStr("login", ctx.user.login);
+    user.kStr("role", ctx.user.role);
+    user.kBool("admin", ctx.isAdmin());
+    user.endObject();
+    view.json("user", user.finish());
+
+    JsonWriter nav;
+    nav.beginObject();
+    nav.kBool("packages", ctx.path.startsWith("/packages"));
+    nav.kBool("docs", ctx.path.startsWith("/docs"));
+    nav.kBool("dashboard", ctx.path.startsWith("/dashboard"));
+    nav.kBool("admin", ctx.path.startsWith("/admin"));
+    nav.endObject();
+    view.json("nav", nav.finish());
+
+    const String notice = noticeJson(ctx);
+    if !notice.isEmpty() { view.json("notice", notice); }
+}
+
+/**
+ * Render a page template inside the layout. `page` is the name of the template (see templates/pages), `view` holds
+ * the data the page was prepared with.
+ */
+public f<String> renderPage(const Ctx& ctx, string page, const String& title, const String& description, View& view) {
+    bindShell(ctx, view);
+    view.text("page", String(page));
+    view.text("title", title);
+    view.text("description", description);
+    TemplateSet templates = loadHostTemplates();
+    return templates.render("layout", view);
 }
 
 public f<String> errorPageHtml(const Ctx& ctx, int status, const String& heading, const String& text) {
-    String body = String("<div class=\"container narrow center-text section\"><p class=\"error-code\">") + fmtLong(cast<long>(status)) + "</p>";
-    body += "<h1>" + esc(heading) + "</h1><p class=\"muted\">" + esc(text) + "</p>";
-    body += "<p><a class=\"btn btn-primary\" href=\"/\">Back to the rack</a></p></div>";
-    return layoutPage(ctx, heading, text, body);
+    View view;
+    view.text("code", fmtLong(cast<long>(status)));
+    view.text("heading", heading);
+    view.text("text", text);
+    return renderPage(ctx, "pages/error", heading, text, view);
 }
 
 public f<String> notFound(Ctx& ctx) {
@@ -179,69 +129,26 @@ public f<String> requireLogin(Ctx& ctx) {
 // Components
 // ---------------------------------------------------------------------------------------------------------------------
 
-public f<String> tagChip(const String& tag, bool linked = true) {
-    if !linked { return String("<span class=\"tag\">") + esc(tag) + "</span>"; }
-    return String("<a class=\"tag\" href=\"/packages?tag=") + urlEncode(tag) + "\">" + esc(tag) + "</a>";
-}
-
-public f<String> tagList(const String& commaSeparated) {
-    if commaSeparated.isEmpty() { return String(""); }
-    String h = String("<ul class=\"tags\">");
-    const Vector<String> tags = split(commaSeparated, ',');
-    for unsigned long i = 0l; i < tags.getSize(); i++ {
-        h += "<li>" + tagChip(tags.get(i)) + "</li>";
-    }
-    h += "</ul>";
-    return h;
-}
-
-public f<String> stat(const String& icon, const String& value, const String& label) {
-    return String("<span class=\"stat\" title=\"") + esc(label) + "\">" + icon + "<span>" + esc(value) + "</span></span>";
-}
-
 /**
- * A package card for lists. Expects the columns of the search query.
+ * Data for partials/pagination.html. `baseQuery` is the already encoded query string without the page parameter.
  */
-public f<String> packageCard(JV row) {
-    const String name = row.getStr("name");
-    String h = String("<li class=\"card package-card\"><div class=\"card-head\">");
-    h += "<h3><a href=\"/packages/" + urlEncode(name) + "\">" + esc(name) + "</a>";
-    const String version = row.getStr("latest_version");
-    if !version.isEmpty() { h += " <span class=\"version\">v" + esc(version) + "</span>"; }
-    h += "</h3></div>";
-    h += "<p class=\"card-desc\">" + esc(row.getStr("description")) + "</p>";
-    h += tagList(row.getStr("tags"));
-    h += "<div class=\"card-meta\">";
-    h += stat(iconDownload(), fmtCount(row.getNum("downloads_total")), String("Total downloads"));
-    h += stat(iconStar(), fmtCount(row.getNum("stars")), String("GitHub stars"));
-    h += "<span class=\"stat\" title=\"Maintainer\">" + iconUser() + "<a href=\"/packages?owner=" + urlEncode(row.getStr("owner_login")) + "\">" + esc(row.getStr("owner_login")) + "</a></span>";
-    h += stat(iconClock(), fmtDate(row.getStr("updated_at")), String("Last updated"));
-    h += "</div></li>";
-    return h;
-}
-
-/**
- * Pagination links; `baseQuery` is the already encoded query string without the page parameter
- */
-public f<String> pagination(const String& basePath, const String& baseQuery, long page, long pageCount) {
-    if pageCount <= 1l { return String(""); }
+public f<String> paginationJson(const String& basePath, const String& baseQuery, long page, long pageCount) {
     const String prefix = basePath + "?" + baseQuery + (baseQuery.isEmpty() ? "" : "&") + "page=";
-    String h = String("<nav class=\"pagination\" aria-label=\"Pagination\">");
-    if page > 1l { h += "<a class=\"btn btn-ghost\" rel=\"prev\" href=\"" + prefix + fmtLong(page - 1l) + "\">&larr; Previous</a>"; }
-    h += "<span class=\"muted\">Page " + fmtLong(page) + " of " + fmtLong(pageCount) + "</span>";
-    if page < pageCount { h += "<a class=\"btn btn-ghost\" rel=\"next\" href=\"" + prefix + fmtLong(page + 1l) + "\">Next &rarr;</a>"; }
-    h += "</nav>";
-    return h;
-}
-
-public f<String> csrfField(const Ctx& ctx) {
-    return String("<input type=\"hidden\" name=\"csrf\" value=\"") + esc(ctx.user.csrf) + "\">";
+    JsonWriter w;
+    w.beginObject();
+    w.kBool("show", pageCount > 1l);
+    w.kStr("prev", page > 1l ? prefix + fmtLong(page - 1l) : String(""));
+    w.kStr("next", page < pageCount ? prefix + fmtLong(page + 1l) : String(""));
+    w.kNum("page", page);
+    w.kNum("pages", pageCount);
+    w.endObject();
+    return w.finish();
 }
 
 /**
- * Bar chart as inline SVG. `labels` and `values` have the same length.
+ * Data for partials/bar-chart.html: the geometry of an SVG bar chart. `labels` and `values` have the same length.
  */
-public f<String> barChart(const String& title, const Vector<String>& labels, const Vector<long>& values, const String& unit) {
+public f<String> chartJson(const String& title, const Vector<String>& labels, const Vector<long>& values, const String& unit) {
     const long width = 720l;
     const long height = 200l;
     const long left = 44l;
@@ -266,14 +173,28 @@ public f<String> barChart(const String& title, const Vector<String>& labels, con
 
     const long plotW = width - left - right;
     const long plotH = height - top - bottom;
-    String h = String("<figure class=\"chart\"><figcaption>") + esc(title) + "<span class=\"muted\"> &mdash; " + fmtThousands(total) + " in total</span></figcaption>";
-    h += "<svg viewBox=\"0 0 " + fmtLong(width) + " " + fmtLong(height) + "\" role=\"img\" aria-label=\"" + esc(title) + "\" preserveAspectRatio=\"xMidYMid meet\">";
-    // Grid and y axis labels
+    JsonWriter w;
+    w.beginObject();
+    w.kStr("title", title);
+    w.kStr("total", fmtThousands(total));
+    w.kStr("viewBox", String("0 0 ") + fmtLong(width) + " " + fmtLong(height));
+    // Grid lines with the labels of the y axis
+    w.key("grid");
+    w.beginArray();
     for long g = 0l; g <= 4l; g++ {
         const long y = top + plotH - (plotH * g / 4l);
-        h += "<line class=\"grid\" x1=\"" + fmtLong(left) + "\" x2=\"" + fmtLong(width - right) + "\" y1=\"" + fmtLong(y) + "\" y2=\"" + fmtLong(y) + "\"/>";
-        h += "<text class=\"axis\" x=\"" + fmtLong(left - 6l) + "\" y=\"" + fmtLong(y + 4l) + "\" text-anchor=\"end\">" + fmtCount(step * g) + "</text>";
+        w.beginObject();
+        w.kNum("x1", left);
+        w.kNum("x2", width - right);
+        w.kNum("y", y);
+        w.kNum("labelX", left - 6l);
+        w.kNum("labelY", y + 4l);
+        w.kStr("label", fmtCount(step * g));
+        w.endObject();
     }
+    w.endArray();
+    w.key("bars");
+    w.beginArray();
     if count > 0l {
         const long slot = plotW * 100l / cast<long>(count);
         for unsigned long i = 0l; i < count; i++ {
@@ -282,28 +203,58 @@ public f<String> barChart(const String& title, const Vector<String>& labels, con
             const long x = left + (cast<long>(i) * slot) / 100l;
             const long barW = (slot * 72l) / 10000l > 1l ? (slot * 72l) / 10000l : 1l;
             const long y = top + plotH - barH;
-            h += "<rect class=\"bar\" x=\"" + fmtLong(x + (slot / 100l - barW) / 2l) + "\" y=\"" + fmtLong(y) + "\" width=\"" + fmtLong(barW) + "\" height=\"" + fmtLong(barH > 0l ? barH : 0l) + "\" rx=\"2\">";
-            h += "<title>" + esc(labels.get(i)) + ": " + fmtThousands(value) + " " + esc(unit) + "</title></rect>";
-            if i % 5l == 0l || i + 1l == count {
-                const long lx = x + slot / 200l;
-                h += "<text class=\"axis\" x=\"" + fmtLong(lx) + "\" y=\"" + fmtLong(height - 8l) + "\" text-anchor=\"middle\">" + esc(fmtDayShort(labels.get(i))) + "</text>";
-            }
+            w.beginObject();
+            w.kNum("x", x + (slot / 100l - barW) / 2l);
+            w.kNum("y", y);
+            w.kNum("width", barW);
+            w.kNum("height", barH > 0l ? barH : 0l);
+            w.kStr("tip", labels.get(i) + ": " + fmtThousands(value) + " " + unit);
+            // Only every fifth bar (and the last) gets a label on the x axis
+            const bool labelled = i % 5l == 0l || i + 1l == count;
+            w.kStr("axis", labelled ? fmtDayShort(labels.get(i)) : String(""));
+            w.kNum("axisX", x + slot / 200l);
+            w.kNum("axisY", height - 8l);
+            w.endObject();
         }
     }
-    h += "</svg></figure>";
-    return h;
+    w.endArray();
+    w.endObject();
+    return w.finish();
 }
 
 #[test]
-f<bool> testBarChartRenders() {
+f<bool> testChartJson() {
     Vector<String> labels;
     Vector<long> values;
     for long i = 0l; i < 30l; i++ {
         labels.pushBack(String("2026-09-") + (i < 9l ? "0" : "") + fmtLong(i + 1l));
         values.pushBack(i * 3l);
     }
-    const String svg = barChart(String("Downloads"), labels, values, String("downloads"));
-    assert svg.contains("<svg");
-    assert svg.contains("2026-09-30: 87 downloads");
+    JV chart = parseJson(chartJson(String("Downloads"), labels, values, String("downloads")));
+    assert chart.getStr("title") == "Downloads";
+    assert chart.getStr("total") == "1,305";
+    JV grid = chart.get("grid");
+    assert grid.size() == 5l;
+    JV bars = chart.get("bars");
+    assert bars.size() == 30l;
+    JV last = bars.at(29l);
+    assert last.getStr("tip") == "2026-09-30: 87 downloads";
+    assert last.getStr("axis") == "30 Sep";
+    JV second = bars.at(1l);
+    assert second.getStr("axis") == "";
+    return true;
+}
+
+#[test]
+f<bool> testPaginationJson() {
+    JV middle = parseJson(paginationJson(String("/packages"), String("q=json&sort=name"), 2l, 5l));
+    assert middle.getBool("show");
+    assert middle.getStr("prev") == "/packages?q=json&sort=name&page=1";
+    assert middle.getStr("next") == "/packages?q=json&sort=name&page=3";
+    JV single = parseJson(paginationJson(String("/admin/users"), String(""), 1l, 1l));
+    assert !single.getBool("show");
+    JV first = parseJson(paginationJson(String("/admin/users"), String(""), 1l, 3l));
+    assert first.getStr("prev") == "";
+    assert first.getStr("next") == "/admin/users?page=2";
     return true;
 }

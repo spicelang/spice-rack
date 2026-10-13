@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+    <url><loc>{{ base_url }}/</loc></url>
+    <url><loc>{{ base_url }}/packages</loc></url>
+    {% for row in rows %}
+    <url><loc>{{ base_url }}/packages/{{ row.name|url }}</loc><lastmod>{{ row.updated_at|head:10 }}</lastmod></url>
+    {% endfor %}
+</urlset>

@@ -4,6 +4,7 @@ import "./json";
 import "./semver";
 import "./core";
 import "./layout";
+import "./template";
 
 // ---------------------------------------------------------------------------------------------------------------------
 // The public package page: README, versions, dependencies and stats
@@ -40,16 +41,23 @@ public f<String> depTreeSql() {
 const long MAX_TREE_NODES = 400l;
 
 /**
- * One level of the tree: all edges that start at `parent`. `depth` is the depth of the edges to render.
+ * One level of the tree as JSON for partials/dep-tree.html: all edges that start at `parent`. `depth` is the depth of the
+ * edges to write. Every node has its own `children`; once `budget` nodes are written, a "more" marker ends the level.
  */
-f<String> renderDepLevel(JV edges, const String& parent, long depth, long& budget) {
-    String items;
-    unsigned long shown = 0l;
-    for JV edge = edges.first(); edge.exists(); edge = edge.after() {
+p writeDepLevel(JsonWriter& w, JV edges, const String& parent, long depth, long& budget) {
+    // A level that cannot show anything is left out completely, so its parent renders as a leaf
+    if budget <= 0l { return; }
+    bool marked = false;
+    for JV edge = edges.first(); edge.exists() && !marked; edge = edge.after() {
         if edge.getNum("depth") != depth || edge.getStr("parent") != parent { continue; }
-        if budget <= 0l { items += "<li class=\"dep-more muted\">&hellip; more dependencies not shown</li>"; break; }
+        if budget <= 0l {
+            w.beginObject();
+            w.kBool("more", true);
+            w.endObject();
+            marked = true;
+            continue;
+        }
         budget--;
-        shown++;
         const String dep = edge.getStr("dep");
         const String constraint = edge.getStr("constraint_text");
         const String resolved = edge.getStr("resolved");
@@ -59,35 +67,28 @@ f<String> renderDepLevel(JV edges, const String& parent, long depth, long& budge
             const Semver latest = parseSemver(resolved);
             satisfied = latest.valid && satisfies(latest, constraint);
         }
-
-        String label = String("<span class=\"dep-name\">");
-        if inRegistry { label += "<a href=\"/packages/" + urlEncode(dep) + "\">" + esc(dep) + "</a>"; }
-        else { label += esc(dep); }
-        label += "</span> <code class=\"dep-constraint\">" + esc(constraint) + "</code>";
-        if !inRegistry { label += " <span class=\"badge badge-warn\" title=\"This package is not published on the registry\">not found</span>"; }
-        else if !resolved.isEmpty() {
-            label += " <span class=\"muted\">&rarr; v" + esc(resolved) + "</span>";
-            if !satisfied { label += " <span class=\"badge badge-warn\" title=\"The latest version does not satisfy the constraint\">mismatch</span>"; }
-        }
-
-        const String children = inRegistry ? renderDepLevel(edges, dep, depth + 1l, budget) : String("");
-        if children.isEmpty() {
-            items += "<li class=\"dep-leaf\">" + label + "</li>";
-        } else {
-            items += String("<li><details") + (depth == 1l ? " open" : "") + "><summary>" + label + "</summary>" + children + "</details></li>";
-        }
+        w.beginObject();
+        w.kStr("name", dep);
+        w.kStr("constraint", constraint);
+        w.kStr("resolved", resolved);
+        w.kBool("in_registry", inRegistry);
+        w.kBool("mismatch", !satisfied);
+        w.kBool("open", depth == 1l);
+        w.key("children");
+        w.beginArray();
+        if inRegistry { writeDepLevel(w, edges, dep, depth + 1l, budget); }
+        w.endArray();
+        w.endObject();
     }
-    if shown == 0l { return String(""); }
-    return String("<ul class=\"dep-tree\">") + items + "</ul>";
 }
 
-public f<String> renderDependencyTree(JV edges, const String& root) {
+public f<String> depTreeJson(JV edges, const String& root) {
     long budget = MAX_TREE_NODES;
-    return renderDepLevel(edges, root, 1l, budget);
-}
-
-public f<long> countDependencyNodes(JV edges) {
-    return cast<long>(edges.size());
+    JsonWriter w;
+    w.beginArray();
+    writeDepLevel(w, edges, root, 1l, budget);
+    w.endArray();
+    return w.finish();
 }
 
 #[test]
@@ -95,187 +96,24 @@ f<bool> testDependencyTree() {
     JV edges = parseJson(String("[{\"depth\":1,\"parent\":\"app\",\"dep\":\"web\",\"constraint_text\":\"^1.0.0\",\"dev\":0,\"in_registry\":1,\"resolved\":\"1.2.0\"}," +
                                 "{\"depth\":1,\"parent\":\"app\",\"dep\":\"ghost\",\"constraint_text\":\"*\",\"dev\":0,\"in_registry\":0,\"resolved\":null}," +
                                 "{\"depth\":2,\"parent\":\"web\",\"dep\":\"http\",\"constraint_text\":\"^2.0.0\",\"dev\":0,\"in_registry\":1,\"resolved\":\"1.0.0\"}]"));
-    const String html = renderDependencyTree(edges, String("app"));
-    assert html.contains("<details open>");
-    assert html.contains("href=\"/packages/http\"");
-    assert html.contains("not found");
-    assert html.contains("mismatch");
+    const String json = depTreeJson(edges, String("app"));
+    JV tree = parseJson(json);
+    assert tree.size() == 2l;
+    JV web = tree.at(0l);
+    assert web.getStr("name") == "web";
+    assert web.getBool("open");
+    assert !web.getBool("mismatch");
+    JV children = web.get("children");
+    assert children.size() == 1l;
+    JV http = children.at(0l);
+    assert http.getStr("name") == "http";
+    assert http.getBool("mismatch");
+    assert !http.getBool("open");
+    JV ghost = tree.at(1l);
+    assert !ghost.getBool("in_registry");
+    JV ghostChildren = ghost.get("children");
+    assert ghostChildren.size() == 0l;
     return true;
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
-// Tabs
-// ---------------------------------------------------------------------------------------------------------------------
-
-f<String> tabLink(const String& name, const String& label, const String& packageName, const String& active, const String& badge = String("")) {
-    String cls = String("tab");
-    if name == active { cls += " active"; }
-    const String href = String("/packages/") + urlEncode(packageName) + (name == TAB_README ? String("") : String("?tab=") + name);
-    String link = String("<a class=\"") + cls + "\" href=\"" + href + "\"" + (name == active ? " aria-current=\"page\"" : "") + ">" + label;
-    if !badge.isEmpty() { link += "<span class=\"tab-badge\">" + esc(badge) + "</span>"; }
-    return link + "</a>";
-}
-
-f<String> renderReadmeTab(JV pkg, JV rows) {
-    JV row = rows.first();
-    const String html = row.getStr("readme_html");
-    if html.isEmpty() {
-        String h = String("<div class=\"empty\"><p><strong>No README found.</strong></p><p class=\"muted\">Add a README to the GitHub repository and sync the package to see it here.</p>");
-        h += "<p><a class=\"btn\" href=\"https://github.com/" + urlEncode(pkg.getStr("repo_owner")) + "/" + urlEncode(pkg.getStr("repo_name")) + "\" rel=\"noopener\">" + iconGithub() + "View on GitHub</a></p></div>";
-        return h;
-    }
-    // The HTML was rendered and sanitized by GitHub
-    return String("<article class=\"readme markdown-body\">") + html + "</article>";
-}
-
-f<String> renderVersionsTab(JV pkg, JV versions) {
-    if versions.size() == 0l {
-        return String("<div class=\"empty\"><p><strong>No releases yet.</strong></p><p class=\"muted\">Publish a GitHub release with a semantic version tag (for example <code>v1.0.0</code>) to make this package installable.</p></div>");
-    }
-    const String name = pkg.getStr("name");
-    String h = String("<ol class=\"versions\">");
-    bool first = true;
-    for JV v = versions.first(); v.exists(); v = v.after() {
-        const String version = v.getStr("version");
-        h += "<li class=\"version-item\" id=\"v" + esc(version) + "\"><div class=\"version-head\">";
-        h += "<h3>v" + esc(version) + "</h3>";
-        if v.getNum("prerelease") == 1l { h += "<span class=\"badge badge-warn\">pre-release</span>"; }
-        if version == pkg.getStr("latest_version") { h += "<span class=\"badge badge-ok\">latest</span>"; }
-        h += "<span class=\"muted\">" + fmtDate(v.getStr("published_at")) + "</span>";
-        h += "<span class=\"spacer\"></span>";
-        h += "<span class=\"stat\" title=\"Downloads of this version\">" + iconDownload() + "<span>" + fmtThousands(v.getNum("downloads")) + "</span></span>";
-        h += "<a class=\"btn btn-small\" href=\"/api/v1/packages/" + urlEncode(name) + "/versions/" + urlEncode(version) + "/download\">Download</a>";
-        h += "</div>";
-        const String title = v.getStr("title");
-        if !title.isEmpty() && title != "v" + version && title != version { h += "<p class=\"version-title\">" + esc(title) + "</p>"; }
-        const String changelogHtml = v.getStr("changelog_html");
-        const String changelog = v.getStr("changelog");
-        if !changelogHtml.isEmpty() {
-            h += String("<details class=\"changelog\"") + (first ? " open" : "") + "><summary>Changelog</summary><div class=\"markdown-body\">" + changelogHtml + "</div></details>";
-        } else if !changelog.isEmpty() {
-            h += String("<details class=\"changelog\"") + (first ? " open" : "") + "><summary>Changelog</summary><pre>" + esc(changelog) + "</pre></details>";
-        } else {
-            h += "<p class=\"muted\">No release notes.</p>";
-        }
-        h += "</li>";
-        first = false;
-    }
-    h += "</ol>";
-    return h;
-}
-
-f<String> renderDepsTab(JV pkg, JV direct, JV edges, JV dependents) {
-    const String name = pkg.getStr("name");
-    String h = String("<section class=\"panel\"><h2>Dependency tree</h2>");
-    const String latestVersion = pkg.getStr("latest_version");
-    if latestVersion.isEmpty() {
-        h += "<p class=\"muted\">This package has no release yet, so there are no dependencies to show.</p>";
-    } else if direct.size() == 0l {
-        h += "<p class=\"muted\">Version " + esc(pkg.getStr("latest_version")) + " has no dependencies.</p>";
-    } else {
-        h += "<p class=\"muted\">Dependencies of <strong>v" + esc(pkg.getStr("latest_version")) + "</strong>, resolved against the latest versions on this registry. ";
-        h += "Click a package to open it; expand a row to see what it needs in turn.</p>";
-        const String tree = renderDependencyTree(edges, name);
-        h += tree;
-        // Development dependencies are listed flat, they are not installed transitively
-        String dev;
-        for JV d = direct.first(); d.exists(); d = d.after() {
-            if d.getNum("dev") != 1l { continue; }
-            dev += "<li><a href=\"/packages/" + urlEncode(d.getStr("dep_name")) + "\">" + esc(d.getStr("dep_name")) + "</a> <code class=\"dep-constraint\">" + esc(d.getStr("constraint_text")) + "</code></li>";
-        }
-        if !dev.isEmpty() { h += "<h3>Development dependencies</h3><ul class=\"plain-list\">" + dev + "</ul>"; }
-    }
-    h += "</section>";
-    h += "<section class=\"panel\"><h2>Used by</h2>";
-    if dependents.size() == 0l {
-        h += "<p class=\"muted\">No other package on the registry depends on " + esc(name) + " yet.</p>";
-    } else {
-        h += "<ul class=\"tags\">";
-        for JV d = dependents.first(); d.exists(); d = d.after() {
-            h += "<li><a class=\"tag\" href=\"/packages/" + urlEncode(d.getStr("name")) + "\">" + esc(d.getStr("name")) + "</a></li>";
-        }
-        h += "</ul>";
-    }
-    h += "</section>";
-    return h;
-}
-
-f<String> renderStatsTab(JV pkg, JV series, JV totals, JV versions) {
-    Vector<String> labels;
-    Vector<long> downloads;
-    Vector<long> views;
-    for JV day = series.first(); day.exists(); day = day.after() {
-        labels.pushBack(day.getStr("day"));
-        downloads.pushBack(day.getNum("downloads"));
-        views.pushBack(day.getNum("views"));
-    }
-    JV t = totals.first();
-    String h = String("<div class=\"tiles\">");
-    h += "<div class=\"tile\"><span class=\"tile-value\">" + fmtThousands(pkg.getNum("downloads_total")) + "</span><span class=\"tile-label\">Downloads, all time</span></div>";
-    h += "<div class=\"tile\"><span class=\"tile-value\">" + fmtThousands(t.getNum("downloads_30d")) + "</span><span class=\"tile-label\">Downloads, last 30 days</span></div>";
-    h += "<div class=\"tile\"><span class=\"tile-value\">" + fmtThousands(t.getNum("views_30d")) + "</span><span class=\"tile-label\">Page views, last 30 days</span></div>";
-    h += "<div class=\"tile\"><span class=\"tile-value\">" + fmtThousands(pkg.getNum("dependents")) + "</span><span class=\"tile-label\">Packages depending on it</span></div>";
-    h += "<div class=\"tile\"><span class=\"tile-value\">" + fmtThousands(pkg.getNum("stars")) + "</span><span class=\"tile-label\">GitHub stars</span></div>";
-    h += "</div>";
-    h += "<section class=\"panel\">" + barChart(String("Downloads per day (last 30 days)"), labels, downloads, String("downloads")) + "</section>";
-    h += "<section class=\"panel\">" + barChart(String("Page views per day (last 30 days)"), labels, views, String("views")) + "</section>";
-    h += "<section class=\"panel\"><h2>Downloads by version</h2>";
-    if versions.size() == 0l {
-        h += "<p class=\"muted\">No releases yet.</p>";
-    } else {
-        long maxDownloads = 1l;
-        for JV v = versions.first(); v.exists(); v = v.after() {
-            if v.getNum("downloads") > maxDownloads { maxDownloads = v.getNum("downloads"); }
-        }
-        h += "<table class=\"table\"><thead><tr><th>Version</th><th>Released</th><th class=\"num\">Downloads</th><th class=\"bar-cell\"></th></tr></thead><tbody>";
-        unsigned long shown = 0l;
-        for JV v = versions.first(); v.exists() && shown < 15l; v = v.after() {
-            const long count = v.getNum("downloads");
-            h += "<tr><td><a href=\"/packages/" + urlEncode(pkg.getStr("name")) + "?tab=versions#v" + esc(v.getStr("version")) + "\">v" + esc(v.getStr("version")) + "</a></td>";
-            h += "<td>" + fmtDate(v.getStr("published_at")) + "</td><td class=\"num\">" + fmtThousands(count) + "</td>";
-            h += "<td class=\"bar-cell\"><span class=\"inline-bar\" style=\"width:" + fmtLong(count * 100l / maxDownloads) + "%\"></span></td></tr>";
-            shown++;
-        }
-        h += "</tbody></table>";
-    }
-    h += "</section>";
-    h += "<p class=\"muted small\">Downloads are counted when a version archive is fetched through the registry API. Page views exclude well-known bots.</p>";
-    return h;
-}
-
-f<String> renderSidebar(const Ctx& ctx, JV pkg) {
-    const String name = pkg.getStr("name");
-    const String version = pkg.getStr("latest_version");
-    const String repoUrl = String("https://github.com/") + urlEncode(pkg.getStr("repo_owner")) + "/" + urlEncode(pkg.getStr("repo_name"));
-    String h = String("<aside class=\"sidebar\">");
-    if !version.isEmpty() {
-        h += "<section class=\"side-block\"><h2>Use this package</h2>";
-        h += "<p class=\"muted small\">Add it to the <code>dependencies</code> of your <code>spice.json</code>:</p>";
-        const Semver parsed = parseSemver(version);
-        h += "<pre class=\"code\"><code>\"" + esc(name) + "\": \"^" + esc(parsed.valid ? fmtLong(parsed.major) + "." + fmtLong(parsed.minor) + "." + fmtLong(parsed.patch) : version) + "\"</code></pre>";
-        h += "<p><a class=\"btn btn-block\" href=\"/api/v1/packages/" + urlEncode(name) + "/versions/" + urlEncode(version) + "/download\">" + iconDownload() + "Download v" + esc(version) + "</a></p></section>";
-    }
-    h += "<section class=\"side-block\"><h2>About</h2><dl class=\"facts\">";
-    if !version.isEmpty() { h += "<dt>Latest version</dt><dd>v" + esc(version) + "</dd><dt>Published</dt><dd>" + fmtDate(pkg.getStr("latest_published")) + "</dd>"; }
-    h += "<dt>Downloads</dt><dd>" + fmtThousands(pkg.getNum("downloads_total")) + "</dd>";
-    h += "<dt>GitHub stars</dt><dd>" + fmtThousands(pkg.getNum("stars")) + "</dd>";
-    const String license = pkg.getStr("license");
-    if !license.isEmpty() { h += "<dt>License</dt><dd>" + esc(license) + "</dd>"; }
-    h += "<dt>Maintainer</dt><dd><a href=\"/packages?owner=" + urlEncode(pkg.getStr("owner_login")) + "\">" + esc(pkg.getStr("owner_login")) + "</a></dd>";
-    h += "<dt>Registered</dt><dd>" + fmtDate(pkg.getStr("created_at")) + "</dd>";
-    h += "</dl></section>";
-    h += "<section class=\"side-block\"><h2>Links</h2><ul class=\"plain-list\">";
-    h += "<li><a href=\"" + esc(repoUrl) + "\" rel=\"noopener\">" + iconGithub() + "Repository</a></li>";
-    const String homepage = pkg.getStr("homepage");
-    if isHttpUrl(homepage) { h += "<li><a href=\"" + esc(homepage) + "\" rel=\"noopener nofollow\">Homepage</a></li>"; }
-    h += "<li><a href=\"" + esc(repoUrl) + "/issues\" rel=\"noopener\">Issues</a></li>";
-    h += "<li><a href=\"/api/v1/packages/" + urlEncode(name) + "\">JSON metadata</a></li>";
-    h += "</ul></section>";
-    if ctx.user.present && (ctx.isAdmin() || ctx.user.id == pkg.getNum("owner_id")) {
-        h += "<section class=\"side-block\"><a class=\"btn btn-block\" href=\"/dashboard/packages/" + urlEncode(name) + "\">Manage package</a></section>";
-    }
-    h += "</aside>";
-    return h;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -346,39 +184,74 @@ public f<String> handlePackagePage(Ctx& ctx, const String& name) {
     JV pkg = pkgRows.first();
     if !pkg.exists() { return notFound(ctx); }
 
-    String content = String("<div class=\"package-header\"><div class=\"container\">");
-    content += "<div class=\"title-row\"><h1>" + esc(name) + "</h1>";
+    View view;
+    view.bind("pkg", pkg);
+    view.text("name", name);
+    view.text("tab", tab);
     const String latest = pkg.getStr("latest_version");
-    if !latest.isEmpty() { content += "<span class=\"version big\">v" + esc(latest) + "</span>"; }
-    content += "</div><p class=\"lead\">" + esc(pkg.getStr("description")) + "</p>";
-    content += tagList(pkg.getStr("tags"));
-    content += "<nav class=\"tabs\" aria-label=\"Package sections\">";
-    content += tabLink(String(TAB_README), String("Readme"), name, tab);
-    content += tabLink(String(TAB_VERSIONS), String("Versions"), name, tab);
-    content += tabLink(String(TAB_DEPS), String("Dependencies"), name, tab);
-    content += tabLink(String(TAB_STATS), String("Stats"), name, tab);
-    content += "</nav></div></div>";
 
-    content += "<div class=\"container package-layout\"><div class=\"package-main\">";
     if tab == TAB_README {
         JV readmeRows = ctx.rows(0, 1l);
-        content += renderReadmeTab(pkg, readmeRows);
+        view.bind("readme", readmeRows.first());
+        view.text("tab_page", String("package/readme"));
     } else if tab == TAB_VERSIONS {
-        JV versions = ctx.rows(0, 1l);
-        content += renderVersionsTab(pkg, versions);
+        view.bind("versions", ctx.rows(0, 1l));
+        view.text("tab_page", String("package/versions"));
     } else if tab == TAB_DEPS {
         JV direct = ctx.rows(0, 1l);
         JV edges = ctx.rows(0, 2l);
-        JV dependents = ctx.rows(0, 3l);
-        content += renderDepsTab(pkg, direct, edges, dependents);
+        bool hasDev = false;
+        for JV d = direct.first(); d.exists(); d = d.after() {
+            if d.getNum("dev") == 1l { hasDev = true; }
+        }
+        view.bind("direct", direct);
+        view.flag("has_dev", hasDev);
+        view.json("tree", depTreeJson(edges, name));
+        view.bind("dependents", ctx.rows(0, 3l));
+        view.text("tab_page", String("package/dependencies"));
     } else {
         JV versions = ctx.rows(0, 1l);
         JV series = ctx.rows(0, 2l);
-        JV totals = ctx.rows(0, 3l);
-        content += renderStatsTab(pkg, series, totals, versions);
+        JV totalRows = ctx.rows(0, 3l);
+        Vector<String> labels;
+        Vector<long> downloads;
+        Vector<long> views;
+        for JV day = series.first(); day.exists(); day = day.after() {
+            labels.pushBack(day.getStr("day"));
+            downloads.pushBack(day.getNum("downloads"));
+            views.pushBack(day.getNum("views"));
+        }
+        // The bars of the per-version table are relative to the most downloaded of the shown versions
+        long maxDownloads = 1l;
+        for JV v = versions.first(); v.exists(); v = v.after() {
+            if v.getNum("downloads") > maxDownloads { maxDownloads = v.getNum("downloads"); }
+        }
+        JsonWriter perVersion;
+        perVersion.beginArray();
+        unsigned long shown = 0l;
+        for JV v = versions.first(); v.exists() && shown < 15l; v = v.after() {
+            perVersion.beginObject();
+            perVersion.kStr("version", v.getStr("version"));
+            perVersion.kStr("published_at", v.getStr("published_at"));
+            perVersion.kNum("downloads", v.getNum("downloads"));
+            perVersion.kNum("width", v.getNum("downloads") * 100l / maxDownloads);
+            perVersion.endObject();
+            shown++;
+        }
+        perVersion.endArray();
+        view.bind("totals", totalRows.first());
+        view.json("downloads_chart", chartJson(String("Downloads per day (last 30 days)"), labels, downloads, String("downloads")));
+        view.json("views_chart", chartJson(String("Page views per day (last 30 days)"), labels, views, String("views")));
+        view.json("version_stats", perVersion.finish());
+        view.text("tab_page", String("package/stats"));
     }
-    content += "</div>" + renderSidebar(ctx, pkg) + "</div>";
+
+    // The sidebar suggests a caret constraint for the latest version
+    const Semver parsed = parseSemver(latest);
+    view.text("caret_version", parsed.valid ? fmtLong(parsed.major) + "." + fmtLong(parsed.minor) + "." + fmtLong(parsed.patch) : latest);
+    view.flag("homepage_ok", isHttpUrl(pkg.getStr("homepage")));
+    view.flag("can_manage", ctx.user.present && (ctx.isAdmin() || ctx.user.id == pkg.getNum("owner_id")));
 
     const String title = name + (latest.isEmpty() ? String("") : String(" ") + latest);
-    return ctx.html(200, layoutPage(ctx, title, pkg.getStr("description"), content));
+    return ctx.html(200, renderPage(ctx, "pages/package", title, pkg.getStr("description"), view));
 }
