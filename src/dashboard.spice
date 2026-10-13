@@ -87,8 +87,11 @@ f<String> suggestName(const String& repo) {
     String cleaned;
     for unsigned long i = 0l; i < name.getLength(); i++ {
         const char c = name[i];
-        cleaned.append(isLowerAlnum(c) || c == '-' || c == '_' || c == '.' ? c : '-');
+        if isLowerAlnum(c) { cleaned.append(c); }
+        else if !cleaned.isEmpty() && cleaned[cleaned.getLength() - 1l] != '-' { cleaned.append('-'); }
     }
+    // Drop a trailing separator
+    if !cleaned.isEmpty() && cleaned[cleaned.getLength() - 1l] == '-' { return head(cleaned, cleaned.getLength() - 1l); }
     return cleaned;
 }
 
@@ -171,7 +174,7 @@ public f<String> handleCreatePackage(Ctx& ctx, bool adminMode) {
     const bool repoValid = parseRepoRef(repoInput, owner, repo);
     if !repoValid { errors.pushBack(String("Please choose a repository or enter it as owner/name.")); }
     if name.isEmpty() && repoValid { name = suggestName(repo); }
-    if repoValid && !isValidPackageName(name) { errors.pushBack(String("The package name must have 2-64 characters: lowercase letters, digits, '-', '_' and '.', starting with a letter or digit.")); }
+    if repoValid && !isValidPackageName(name) { errors.pushBack(String("The package name must be lower kebab-case with 2-64 characters, like my-package: lowercase letters and digits separated by single hyphens.")); }
     const String homepage = ctx.formTrim("homepage");
     if !homepage.isEmpty() && (!isHttpUrl(homepage) || homepage.getLength() > 255l) { errors.pushBack(String("The homepage must be an http(s) URL.")); }
     const String description = head(ctx.formTrim("description"), 500l);
@@ -433,6 +436,14 @@ public f<String> handleManagePackage(Ctx& ctx, const String& name, bool adminMod
 }
 
 #[test]
+f<bool> testSuggestName() {
+    assert suggestName(String("Json_Parser")) == "json-parser";
+    assert suggestName(String("my..lib.")) == "my-lib";
+    assert suggestName(String("web-server")) == "web-server";
+    return true;
+}
+
+#[test]
 f<bool> testParseRepoRef() {
     String owner;
     String repo;
@@ -441,6 +452,6 @@ f<bool> testParseRepoRef() {
     assert !parseRepoRef(String("foo"), owner, repo);
     assert !parseRepoRef(String("foo/bar/baz"), owner, repo);
     assert !parseRepoRef(String("foo/ba r"), owner, repo);
-    assert suggestName(String("My_Repo!")) == "my_repo-";
+    assert suggestName(String("My_Repo!")) == "my-repo";
     return true;
 }

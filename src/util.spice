@@ -343,14 +343,16 @@ public f<bool> isLowerAlnum(char c) {
 }
 
 /**
- * Package names: 2-64 characters, lowercase letters, digits, '-', '_' and '.'. They must start with a letter or digit.
+ * Package names are lower kebab-case: 2-64 characters, lowercase letters and digits in words separated by single '-'.
+ * They cannot start or end with '-'.
  */
 public f<bool> isValidPackageName(const String& name) {
     const unsigned long len = name.getLength();
-    if len < 2l || len > 64l || !isLowerAlnum(name[0l]) { return false; }
-    for unsigned long i = 0l; i < len; i++ {
+    if len < 2l || len > 64l || !isLowerAlnum(name[0l]) || !isLowerAlnum(name[len - 1l]) { return false; }
+    for unsigned long i = 1l; i < len; i++ {
         const char c = name[i];
-        if !isLowerAlnum(c) && c != '-' && c != '_' && c != '.' { return false; }
+        if c == '-' { if name[i - 1l] == '-' { return false; } continue; }
+        if !isLowerAlnum(c) { return false; }
     }
     return true;
 }
@@ -480,6 +482,11 @@ f<bool> testValidation() {
     assert !isValidPackageName(String("Json"));
     assert !isValidPackageName(String("a"));
     assert !isValidPackageName(String("-abc"));
+    assert !isValidPackageName(String("abc-"));
+    assert !isValidPackageName(String("a--b"));
+    assert !isValidPackageName(String("json_parser"));
+    assert !isValidPackageName(String("json.parser"));
+    assert isValidPackageName(String("web-server-2"));
     assert normalizeTag(String("  Web Server ")) == "web-server";
     const Vector<String> tags = parseTags(String("Web, cli, web;;Net_Utils"));
     assert tags.getSize() == 3l;
