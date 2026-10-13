@@ -65,3 +65,16 @@ jobs:
       - uses: actions/checkout@v7
       - name: Build the image
         run: docker build -t spice-rack:ci .
+
+      # Pushes to main publish the staging image; pull requests only build it (they have no access to the secret)
+      - name: Log in to Docker Hub
+        if: github.event_name == 'push'
+        run: echo "$DOCKER_HUB_SECRET" | docker login --username chillibits --password-stdin
+        env:
+          DOCKER_HUB_SECRET: ${{ secrets.DOCKER_HUB_SECRET }}
+
+      - name: Push the staging image
+        if: github.event_name == 'push'
+        run: |
+          docker tag spice-rack:ci chillibits/spice-rack:staging
+          docker push chillibits/spice-rack:staging

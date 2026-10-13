@@ -1,0 +1,32 @@
+name: Release
+
+# Creating a tag such as v1.2.3 publishes chillibits/spice-rack:1.2.3 and :latest to Docker Hub
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  docker:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the image
+        run: docker build -t spice-rack:release .
+
+      - name: Log in to Docker Hub
+        run: echo "$DOCKER_HUB_SECRET" | docker login --username chillibits --password-stdin
+        env:
+          DOCKER_HUB_SECRET: ${{ secrets.DOCKER_HUB_SECRET }}
+
+      - name: Push the release images
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          docker tag spice-rack:release "chillibits/spice-rack:${VERSION}"
+          docker tag spice-rack:release chillibits/spice-rack:latest
+          docker push "chillibits/spice-rack:${VERSION}"
+          docker push chillibits/spice-rack:latest
