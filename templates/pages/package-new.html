@@ -17,7 +17,7 @@
         {% include "partials/field" with label="Repository" name="repo" value=form.repo hint="owner/name, e.g. spicelang/spice. You need push access to it" required="yes" placeholder="owner/name" %}
         {% include "partials/field" with label="Maintainer (GitHub login)" name="maintainer" value=form.maintainer hint="The user must have signed in to the registry before." required="yes" %}
         {% endif %}
-        {% include "partials/field" with label="Package name" name="name" value=form.name hint="Lowercase letters, digits, - _ and . (2-64 characters). Leave empty to use the repository name." %}
+        {% include "partials/field" with label="Package name" name="name" value=form.name hint="Lower kebab-case, like my-package (2-64 characters). Leave empty to use the repository name." %}
         {% include "partials/field" with label="Description" name="description" value=form.description hint="One short sentence. Leave empty to use the GitHub description." %}
         {% include "partials/field" with label="Tags" name="tags" value=form.tags hint="Comma separated, up to 8, e.g. json, parser, web" %}
         {% include "partials/field" with label="Homepage" name="homepage" value=form.homepage hint="Optional. Defaults to the homepage from GitHub." %}

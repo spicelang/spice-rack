@@ -22,9 +22,9 @@
         <h2>Links</h2>
         <ul class="plain-list">
             <li><a href="https://github.com/{{ pkg.repo_owner|url }}/{{ pkg.repo_name|url }}" rel="noopener">{% include "icons/github" %}Repository</a></li>
-            {% if homepage_ok %}<li><a href="{{ pkg.homepage }}" rel="noopener nofollow">Homepage</a></li>{% endif %}
-            <li><a href="https://github.com/{{ pkg.repo_owner|url }}/{{ pkg.repo_name|url }}/issues" rel="noopener">Issues</a></li>
-            <li><a href="/api/v1/packages/{{ pkg.name|url }}">JSON metadata</a></li>
+            {% if homepage_ok %}<li><a href="{{ pkg.homepage }}" rel="noopener nofollow">{% include "icons/globe" %}Homepage</a></li>{% endif %}
+            <li><a href="https://github.com/{{ pkg.repo_owner|url }}/{{ pkg.repo_name|url }}/issues" rel="noopener">{% include "icons/issue" %}Issues</a></li>
+            <li><a href="/api/v1/packages/{{ pkg.name|url }}">{% include "icons/braces" %}JSON metadata</a></li>
         </ul>
     </section>
     {% if can_manage %}
