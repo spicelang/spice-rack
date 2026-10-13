@@ -14,7 +14,7 @@
   --accent-2: #4a56a6;
   --accent-2-soft: #ececf6;
   --gradient: linear-gradient(135deg, #d02438 0%, #a10f22 55%, #5a1450 100%);
-  --on-accent: #ffffff;
+  --on-accent: #fff;
   --ok: #17784a;
   --ok-soft: #e1f2e8;
   --warn: #8f5f00;
@@ -93,7 +93,6 @@ html { -webkit-text-size-adjust: 100%; }
 body { margin: 0; min-height: 100vh; display: flex; flex-direction: column; font-family: var(--font); background: var(--bg); color: var(--text); line-height: 1.55; font-size: 16px; }
 img, svg { max-width: 100%; }
 main { flex: 1 0 auto; }
-.site-footer { flex-shrink: 0; }
 a { color: var(--accent-strong); text-decoration: none; }
 a:hover { text-decoration: underline; }
 h1, h2, h3 { line-height: 1.25; margin: 0 0 .5em; letter-spacing: -.01em; }
@@ -346,7 +345,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .error-code { font-size: 4rem; font-weight: 800; background: var(--gradient); -webkit-background-clip: text; background-clip: text; color: transparent; margin: 0; line-height: 1; }
 
 /* Footer */
-.site-footer { border-top: 1px solid var(--border); background: var(--surface); color: var(--muted); font-size: .9rem; }
+.site-footer { flex-shrink: 0; border-top: 1px solid var(--border); background: var(--surface); color: var(--muted); font-size: .9rem; }
 .footer-inner { display: flex; justify-content: space-between; gap: 12px; padding-top: 22px; padding-bottom: 22px; flex-wrap: wrap; align-items: center; }
 .footer-inner .brand-mark { width: 16px; height: 16px; vertical-align: -3px; }
 .footer-links { display: flex; gap: 18px; }

@@ -4,12 +4,22 @@
   "private": true,
   "description": "Thin Node.js host for the Spice Rack WebAssembly module: HTTP, MySQL and outgoing requests",
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "lint": "cd .. && host/node_modules/.bin/eslint -c host/eslint.config.mjs host public && host/node_modules/.bin/stylelint --config host/.stylelintrc.json \"public/*.css\""
   },
   "dependencies": {
     "mysql2": "^3.11.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
+    "stylelint": "^17.16.0",
+    "stylelint-config-standard": "^40.0.0"
   }
 }
