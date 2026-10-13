@@ -3,7 +3,7 @@ import "./util";
 import "./json";
 
 // ---------------------------------------------------------------------------------------------------------------------
-// A small template engine, so the markup lives in templates/*.html and the Spice code only prepares data.
+// A small template engine, so the markup lives in templates/*.html (icons are .svg) and the Spice code only prepares data.
 //
 // The host reads the template files once and hands them to the module (see host/templates.mjs). A template is compiled
 // to a flat token list when it is first used; rendering walks that list against a scope of named values (database rows, small JSON documents,

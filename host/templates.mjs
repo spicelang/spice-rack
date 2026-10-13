@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-const EXTENSIONS = new Set(['.html', '.xml']);
+const EXTENSIONS = new Set(['.html', '.xml', '.svg']);
 
 /** All template files below `dir`, as paths relative to it */
 async function walk(dir, prefix = '') {
