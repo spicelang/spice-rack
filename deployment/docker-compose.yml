@@ -1,0 +1,79 @@
+# Spice Rack on a server: production (chillibits/spice-rack:latest) and staging (chillibits/spice-rack:staging) side by side,
+# one MySQL server with a database for each. TLS and routing are done by the nginx-proxy + acme-companion containers that
+# already run on the server: the apps join their external docker network and announce their host names.
+#
+# Copy this directory to the server, then:
+#   cp .env.example .env          # fill in the secrets and host names (DNS must point to the server)
+#   docker compose up -d
+# Update: docker compose pull && docker compose up -d
+x-app: &app
+  restart: unless-stopped
+  pull_policy: always
+  depends_on:
+    db:
+      condition: service_healthy
+  # Not published: nginx-proxy reaches the apps through the shared network
+
+x-app-environment: &app-environment
+  TRUST_PROXY: "1"
+  DB_HOST: db
+  DB_USER: rack
+  DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+  VIRTUAL_PORT: "8080"
+  LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL:-}
+  GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+  ADMIN_LOGINS: ${ADMIN_LOGINS:-}
+  SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES:-15}
+
+services:
+  db:
+    image: mysql:26.7
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?set DB_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: rack
+      MYSQL_USER: rack
+      MYSQL_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    volumes:
+      - ./volumes/mysql-data:/var/lib/mysql
+      # Creates the staging database; only runs while the data directory is still empty
+      - ./mysql-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  app-prod:
+    <<: *app
+    image: chillibits/spice-rack:latest
+    networks: [default, proxy]
+    environment:
+      <<: *app-environment
+      VIRTUAL_HOST: ${DOMAIN:?set DOMAIN in .env}
+      LETSENCRYPT_HOST: ${DOMAIN}
+      BASE_URL: https://${DOMAIN:?set DOMAIN in .env}
+      DB_NAME: rack
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+
+  app-staging:
+    <<: *app
+    image: chillibits/spice-rack:staging
+    networks: [default, proxy]
+    environment:
+      <<: *app-environment
+      VIRTUAL_HOST: ${STAGING_DOMAIN:?set STAGING_DOMAIN in .env}
+      LETSENCRYPT_HOST: ${STAGING_DOMAIN}
+      BASE_URL: https://${STAGING_DOMAIN:?set STAGING_DOMAIN in .env}
+      DB_NAME: rack_staging
+      GITHUB_CLIENT_ID: ${STAGING_GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${STAGING_GITHUB_CLIENT_SECRET:-}
+
+networks:
+  # Created by the nginx-proxy setup; rename here if yours is called differently
+  proxy:
+    name: nginx-proxy
+    external: true

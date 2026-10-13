@@ -73,7 +73,8 @@ export async function createApp({ config, log, fetchImpl = fetch }) {
   function clientIp(req) {
     if (config.trustProxy) {
       const forwarded = req.headers['x-forwarded-for'];
-      if (typeof forwarded === 'string' && forwarded) return forwarded.split(',')[0].trim();
+      // The last entry is the one the (single) trusted proxy added; earlier ones can be forged by the client
+      if (typeof forwarded === 'string' && forwarded) return forwarded.split(',').pop().trim();
     }
     return req.socket.remoteAddress ?? '';
   }
