@@ -55,7 +55,7 @@ export async function createApp({ config, log, fetchImpl = fetch }) {
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'strict-origin-when-cross-origin',
     'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
-    // The only scripts are /static/theme.js (light/dark switch) and /static/local-time.js (times in the visitor's timezone). README HTML comes from GitHub, but is never allowed to run code here either.
+    // The only scripts are /static/theme.js (light/dark switch), /static/dismiss.js (closes green notices) and /static/local-time.js (times in the visitor's timezone). README HTML comes from GitHub, but is never allowed to run code here either.
     'Content-Security-Policy':
       "default-src 'none'; script-src 'self'; img-src * data:; style-src 'self' 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
   };

@@ -201,6 +201,14 @@ describe('Spice Rack', { skip }, () => {
     has(home.text, /<script src="\/static\/local-time.js" defer><\/script>/);
     has(home.text, /<script src="\/static\/theme.js"><\/script>/);
     has(home.text, /id="theme-toggle"/);
+    has(home.text, /<script src="\/static\/dismiss.js" defer><\/script>/);
+    has(home.text, /<section class="cta">/);
+    const created = await anon.get('/?notice=created');
+    assert.equal(created.status, 200);
+    has(created.text, /class="notice notice-ok"[^]*data-dismiss="notice"/);
+    const denied = await anon.get('/?error=denied');
+    has(denied.text, /notice-err/);
+    lacks(denied.text, /data-dismiss="notice"/);
     const theme = await anon.get('/static/theme.js');
     assert.equal(theme.status, 200);
     has(theme.headers.get('content-type'), /text\/javascript/);

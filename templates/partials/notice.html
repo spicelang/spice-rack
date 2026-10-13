@@ -1,1 +1,1 @@
-{% if notice %}<div class="container"><p class="notice {{ notice.kind }}" role="status">{{ notice.message }}</p></div>{% endif %}
+{% if notice %}<div class="container"><div class="notice {{ notice.kind }}" role="status"><p>{{ notice.message }}</p>{% if notice.kind == "notice-ok" %}<button class="dismiss" type="button" data-dismiss="notice" aria-label="Dismiss" hidden>{% include "icons/close" %}</button>{% endif %}</div></div>{% endif %}
