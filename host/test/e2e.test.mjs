@@ -198,6 +198,11 @@ describe('Spice Rack', { skip }, () => {
     has(home.text, /Find and share/);
     has(home.headers.get('content-security-policy'), /default-src 'none'; script-src 'self'/);
     has(home.text, /<script src="\/static\/local-time.js" defer><\/script>/);
+    has(home.text, /<script src="\/static\/theme.js"><\/script>/);
+    has(home.text, /id="theme-toggle"/);
+    const theme = await anon.get('/static/theme.js');
+    assert.equal(theme.status, 200);
+    has(theme.headers.get('content-type'), /text\/javascript/);
     const script = await anon.get('/static/local-time.js');
     assert.equal(script.status, 200);
     has(script.headers.get('content-type'), /text\/javascript/);
@@ -266,6 +271,19 @@ describe('Spice Rack', { skip }, () => {
     const dup = await admin.post('/dashboard/packages/new', { csrf, repo: 'testadmin/json-parser', name: 'json-parser' });
     assert.equal(dup.status, 409);
     has(dup.text, /already exists/);
+  });
+
+  it('only accepts lower kebab-case package names', async () => {
+    const csrf = admin.csrf((await admin.get('/dashboard/packages/new')).text);
+    has((await admin.get('/dashboard/packages/new')).text, /lower kebab-case/);
+    for (const name of ['Json_Parser', 'json.parser', 'json_parser', '-json', 'json-', 'json--parser', 'a']) {
+      const res = await admin.post('/dashboard/packages/new', { csrf, repo: 'testadmin/json-parser', name });
+      assert.equal(res.status, 400, `${name} should be rejected`);
+      has(res.text, /lower kebab-case/);
+    }
+    // Invalid names do not exist as routes or API resources either
+    assert.equal((await anon.get('/packages/json_parser')).status, 404);
+    assert.equal((await anon.get('/api/v1/packages/json_parser')).status, 404);
   });
 
   it('copes with very large READMEs', async () => {
@@ -346,6 +364,21 @@ describe('Spice Rack', { skip }, () => {
     }
     // special characters must not break the query
     assert.equal((await anon.get("/packages?q=%25_'%22;--")).status, 200);
+  });
+
+  it('ranks name matches above other matches when sorting by relevance', async () => {
+    const order = (text) => [...String(text).matchAll(/<a href="\/packages\/([a-z0-9-]+)">/g)].map((m) => m[1]);
+    // "client" is a tag of http-client and appears in no other package
+    const client = order((await anon.get('/packages?q=client&sort=relevance')).text);
+    assert.deepEqual(client, ['http-client']);
+    // Alphabetical order
+    const byName = order((await anon.get('/packages?sort=name')).text);
+    assert.deepEqual(byName, ['http-client', 'json-parser']);
+    // "http" is a name prefix of http-client
+    const http = order((await anon.get('/packages?q=http&sort=relevance')).text);
+    assert.equal(http[0], 'http-client');
+    // Without a query the default order is by downloads and "relevance" does not fail
+    assert.equal((await anon.get('/packages?sort=relevance')).status, 200);
   });
 
   it('serves the JSON API and counts downloads', async () => {

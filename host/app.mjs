@@ -4,7 +4,7 @@ import http from 'node:http';
 import path from 'node:path';
 import zlib from 'node:zlib';
 
-import { createPool, migrate, waitForDatabase } from './database.mjs';
+import { createPool, migrate, waitForDatabase, warnAboutLegacyPackageNames } from './database.mjs';
 import { createEffects } from './effects.mjs';
 import { createRateLimiter } from './ratelimit.mjs';
 import { loadRuntime } from './runtime.mjs';
@@ -67,6 +67,7 @@ export async function createApp({ config, log, fetchImpl = fetch }) {
   const pool = createPool(config.db);
   await waitForDatabase(pool, log);
   await migrate(config.db, config.migrationsDir, log);
+  await warnAboutLegacyPackageNames(pool, log);
   const executeBatch = createEffects(pool, log, fetchImpl);
   const limiter = createRateLimiter();
 

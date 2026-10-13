@@ -41,6 +41,17 @@ export async function waitForDatabase(pool, log, attempts = 60) {
   }
 }
 
+/**
+ * Package names have to be lower kebab-case (isValidPackageName in src/util.spice). Packages created under the older,
+ * looser rules keep working in the database but their pages 404, so list them for the operator to rename.
+ */
+export async function warnAboutLegacyPackageNames(pool, log) {
+  const [rows] = await pool.query(
+    "SELECT name FROM packages WHERE name NOT REGEXP '^[a-z0-9]+(-[a-z0-9]+)*$' OR CHAR_LENGTH(name) < 2 LIMIT 50",
+  );
+  if (rows.length) log.warn(`packages with names that are not lower kebab-case (rename them as admin): ${rows.map((r) => r.name).join(', ')}`);
+}
+
 /** Apply all pending migrations from the given directory, exactly once, guarded by a lock for multiple instances */
 export async function migrate(dbConfig, dir, log) {
   const connection = await mysql.createConnection({

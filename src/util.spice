@@ -343,6 +343,13 @@ public f<bool> isLowerAlnum(char c) {
 }
 
 /**
+ * The rule in words, shown in forms and error messages (keep in sync with `isValidPackageName`)
+ */
+public f<String> packageNameRule() {
+    return String("Package names are lower kebab-case, like my-package: 2-64 lowercase letters and digits, separated by single hyphens.");
+}
+
+/**
  * Package names are lower kebab-case: 2-64 characters, lowercase letters and digits in words separated by single '-'.
  * They cannot start or end with '-'.
  */

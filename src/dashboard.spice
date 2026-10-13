@@ -126,6 +126,7 @@ f<String> renderCreateForm(const Ctx& ctx, bool adminMode, JV repos, JV taken, c
     View view;
     view.flag("admin_mode", adminMode);
     view.text("area", area(adminMode));
+    view.text("name_hint", packageNameRule() + " Leave empty to use the repository name.");
     view.text("cancel_url", adminMode ? String("/admin/packages") : String("/dashboard"));
     view.list("errors", errors);
     view.json("repos", options.finish());
@@ -174,7 +175,7 @@ public f<String> handleCreatePackage(Ctx& ctx, bool adminMode) {
     const bool repoValid = parseRepoRef(repoInput, owner, repo);
     if !repoValid { errors.pushBack(String("Please choose a repository or enter it as owner/name.")); }
     if name.isEmpty() && repoValid { name = suggestName(repo); }
-    if repoValid && !isValidPackageName(name) { errors.pushBack(String("The package name must be lower kebab-case with 2-64 characters, like my-package: lowercase letters and digits separated by single hyphens.")); }
+    if repoValid && !isValidPackageName(name) { errors.pushBack(packageNameRule()); }
     const String homepage = ctx.formTrim("homepage");
     if !homepage.isEmpty() && (!isHttpUrl(homepage) || homepage.getLength() > 255l) { errors.pushBack(String("The homepage must be an http(s) URL.")); }
     const String description = head(ctx.formTrim("description"), 500l);
