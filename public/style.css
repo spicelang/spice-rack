@@ -13,7 +13,6 @@
   --accent-soft: #fbeaec;
   --accent-2: #4a56a6;
   --accent-2-soft: #ececf6;
-  --gradient: linear-gradient(135deg, #d02438 0%, #a10f22 55%, #5a1450 100%);
   --on-accent: #fff;
   --ok: #17784a;
   --ok-soft: #e1f2e8;
@@ -43,7 +42,6 @@
   --accent-soft: #3a2328;
   --accent-2: #a3acf2;
   --accent-2-soft: #2c2d42;
-  --gradient: linear-gradient(135deg, #ff5468 0%, #e0314f 55%, #8f2a8a 100%);
   --on-accent: #1a0509;
   --ok: #55c785;
   --ok-soft: #1f3329;
@@ -71,7 +69,6 @@
   --accent-soft: #3a2328;
   --accent-2: #a3acf2;
   --accent-2-soft: #2c2d42;
-  --gradient: linear-gradient(135deg, #ff5468 0%, #e0314f 55%, #8f2a8a 100%);
   --on-accent: #1a0509;
   --ok: #55c785;
   --ok-soft: #1f3329;
@@ -142,8 +139,8 @@ pre code { background: none; padding: 0; }
 /* Buttons */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; font: inherit; font-weight: 600; padding: 9px 16px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; text-decoration: none; line-height: 1.2; }
 .btn:hover { border-color: var(--accent); text-decoration: none; }
-.btn-primary { background: var(--gradient); border-color: transparent; color: var(--on-accent); box-shadow: 0 2px 10px rgba(192, 26, 46, .28); }
-.btn-primary:hover { filter: brightness(1.08); border-color: transparent; box-shadow: 0 4px 16px rgba(192, 26, 46, .38); }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn-primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
 .btn-ghost { background: transparent; }
 .btn-small { padding: 5px 11px; font-size: .875rem; }
 .btn-block { display: flex; width: 100%; }
@@ -151,13 +148,20 @@ pre code { background: none; padding: 0; }
 .btn-danger:hover { background: var(--danger); color: var(--surface); border-color: var(--danger); }
 
 /* Notices */
-.notice { margin: 16px 0 0; padding: 12px 16px; border-radius: var(--radius); border: 1px solid; }
+.notice { margin: 16px 0 0; padding: 12px 16px; border-radius: var(--radius); border: 1px solid; display: flex; align-items: flex-start; gap: 12px; }
+.notice p { flex: 1; margin: 0; }
 .notice ul { margin: 0; padding-left: 1.2em; }
+.dismiss { flex: none; display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: inherit; opacity: .7; cursor: pointer; transition: opacity .15s, background-color .15s; }
+.dismiss:hover { opacity: 1; background: rgba(128, 128, 128, .18); }
+.dismiss[hidden] { display: none; }
 .notice-ok { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
 .notice-err { background: var(--accent-soft); border-color: var(--danger); color: var(--danger); }
 
 /* Hero */
 .hero { background: radial-gradient(900px 380px at 85% -10%, var(--accent-soft), transparent 70%), radial-gradient(800px 380px at 10% 0%, var(--accent-2-soft), transparent 70%), var(--bg); border-bottom: 1px solid var(--border); }
+/* On the front page the hero takes up all free height, so the lists and the call to action sit right above the footer */
+main:has(> .hero) { display: flex; flex-direction: column; }
+main:has(> .hero) > .hero { flex: 1 0 auto; display: flex; flex-direction: column; justify-content: center; }
 .hero-inner { padding-top: 56px; padding-bottom: 48px; text-align: center; }
 .hero h1 { font-size: clamp(2.2rem, 5.5vw, 3.4rem); margin-bottom: .3em; letter-spacing: -.035em; font-weight: 800; }
 .lead { font-size: 1.15rem; color: var(--muted); max-width: 640px; }
@@ -309,7 +313,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .panel > :last-child { margin-bottom: 0; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 18px; }
 .tile { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; display: flex; flex-direction: column; }
-.tile-value { font-size: 1.6rem; font-weight: 700; letter-spacing: -.02em; background: var(--gradient); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.tile-value { font-size: 1.6rem; font-weight: 700; letter-spacing: -.02em; color: var(--accent); }
 .tile-label { color: var(--muted); font-size: .85rem; }
 .chart { margin: 0; }
 .chart figcaption { font-weight: 600; margin-bottom: 8px; }
@@ -326,7 +330,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .table .actions { white-space: nowrap; display: flex; gap: 6px; flex-wrap: wrap; border-bottom: 0; }
 .table tr:last-child td { border-bottom: 0; }
 .bar-cell { width: 25%; min-width: 80px; }
-.inline-bar { display: block; height: 8px; border-radius: 4px; background: var(--gradient); min-width: 2px; }
+.inline-bar { display: block; height: 8px; border-radius: 4px; background: var(--accent); min-width: 2px; }
 
 /* Forms */
 .form .field { margin-bottom: 16px; }
@@ -340,9 +344,9 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .prose h2 { margin-top: 1.6em; }
 .steps { padding-left: 0; list-style: none; counter-reset: step; }
 .steps > li { counter-increment: step; position: relative; padding-left: 48px; margin-bottom: 20px; }
-.steps > li::before { content: counter(step); position: absolute; left: 0; top: 0; width: 32px; height: 32px; border-radius: 50%; background: var(--gradient); color: var(--on-accent); font-weight: 700; display: grid; place-items: center; }
+.steps > li::before { content: counter(step); position: absolute; left: 0; top: 0; width: 32px; height: 32px; border-radius: 50%; background: var(--accent); color: var(--on-accent); font-weight: 700; display: grid; place-items: center; }
 .steps h2 { margin-bottom: .2em; font-size: 1.1rem; }
-.error-code { font-size: 4rem; font-weight: 800; background: var(--gradient); -webkit-background-clip: text; background-clip: text; color: transparent; margin: 0; line-height: 1; }
+.error-code { font-size: 4rem; font-weight: 800; color: var(--accent); margin: 0; line-height: 1; }
 
 /* Footer */
 .site-footer { flex-shrink: 0; border-top: 1px solid var(--border); background: var(--surface); color: var(--muted); font-size: .9rem; }
