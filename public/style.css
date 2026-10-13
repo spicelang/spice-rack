@@ -366,7 +366,9 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .brand-mark { background: #f4f4f1; padding: 3px; }
 }
-.theme-toggle { display: inline-grid; place-items: center; width: 36px; height: 36px; padding: 0; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; }
+.theme-toggle { display: inline-grid; place-items: center; width: 34px; padding: 0; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; }
+/* Buttons in the header share one height */
+.main-nav .btn-small, .theme-toggle { height: 34px; }
 .theme-toggle[hidden] { display: none; }
 .theme-toggle:hover { border-color: var(--accent); }
 .theme-toggle .icon { width: 1.2em; height: 1.2em; }
