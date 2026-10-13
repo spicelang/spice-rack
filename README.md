@@ -30,7 +30,8 @@ The wasm module is a pure function. It receives the request, the configuration a
 with either the next batch of effects (SQL statements with parameters, HTTP calls to GitHub) or the finished response. Routing,
 authentication, authorization, CSRF checks, SQL, JSON, HTML rendering, semver resolution and the GitHub sync are all Spice code.
 The markup is not: it lives in `templates/` and is rendered by a small template engine (see [Templates](#templates)). The UI is
-server-rendered HTML + one CSS file; the only script (`public/local-time.js`) shows times of day in the visitor's timezone.
+server-rendered HTML + one CSS file; the only scripts are `public/theme.js` (light/dark switch, remembered in `localStorage`) and
+`public/local-time.js` (shows times of day in the visitor's timezone).
 
 Because WebAssembly has no libc, `src/libc.spice` provides the handful of C functions the Spice runtime needs (a bump allocator
 that is reset for every call, `memcpy`, ...). See `scripts/build-wasm.sh` for why `wasm-ld` is invoked directly.
@@ -39,8 +40,9 @@ that is reset for every call, `memcpy`, ...). See `scripts/build-wasm.sh` for wh
 src/            Spice sources (main.spice = router and wasm exports, one file per area; unit tests sit next to the code)
 templates/      HTML and XML templates for every page, partial and feed
 host/           Node.js host, MySQL pool, migrations runner, end-to-end tests (host/test), demo seeding (host/dev)
-db/migrations/  MySQL schema
-public/         CSS and favicon
+db/migrations/  MySQL schema, applied in file name order on startup (tracked in the `schema_migrations` table)
+public/         CSS, the two scripts and favicons
+deployment/     Compose setup for a server that already runs nginx-proxy (production + staging)
 ```
 
 ## Templates
@@ -89,7 +91,7 @@ shows at render time (unknown filter) ends up as `<!-- template error: … -->` 
 
 `docker-compose.yml` starts MySQL 26.7 (persistent volume), the app (the `Dockerfile` downloads the Spice release given by
 `SPICE_VERSION`, compiles the wasm module and ships it with the Node host) and nginx, which terminates TLS (Let's Encrypt via
-certbot, renewed automatically). The schema is migrated on startup. Back up the `db-data` volume (or use `mysqldump`).
+certbot, renewed automatically). The schema is migrated on startup. Back up `./volumes/mysql-data` (or use `mysqldump`).
 
 Without nginx (own proxy): publish port 8080 of `app`, set `TRUST_PROXY=1` only if a proxy sets `X-Forwarded-For`.
 
@@ -130,6 +132,15 @@ docker run -d --name rack-db -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=rack_
 E2E_DB_PORT=3307 E2E_DB_NAME=rack_test npm test   # end-to-end: real wasm + MySQL, mocked GitHub
 DB_PORT=3307 DB_NAME=rack_test node dev/seed.mjs  # demo data (+ a ready-made admin session cookie), then: node server.mjs
 ```
+
+```bash
+cd host && npm run lint               # ESLint (host, scripts in public/) and Stylelint (public/style.css); runs in CI as well
+scripts/test.sh                       # Spice unit tests + wasm build + host tests in one go (set SPICE=... and E2E_DB_* first)
+```
+
+Schema changes go into a new, numbered file in `db/migrations/` (never edit one that was already released). Package names must be
+lower kebab-case; the rule lives in `isValidPackageName` / `packageNameRule` in `src/util.spice`, so forms and error messages
+cannot drift from the check. On startup the host logs a warning for packages whose names predate that rule.
 
 Template files are read at startup, so restart the host after changing one (the wasm module only needs a rebuild when Spice code
 changes). Spice quirks met on the way, in case you touch the code: method calls cannot be chained on call results (`a.b().c()`), globals must be
