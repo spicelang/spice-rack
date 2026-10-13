@@ -4,6 +4,7 @@ import http from 'node:http';
 import path from 'node:path';
 import zlib from 'node:zlib';
 
+import { createAvatarCache, isAvatarLogin } from './avatars.mjs';
 import { createPool, migrate, waitForDatabase, warnAboutLegacyPackageNames } from './database.mjs';
 import { createEffects } from './effects.mjs';
 import { createRateLimiter } from './ratelimit.mjs';
@@ -70,6 +71,7 @@ export async function createApp({ config, log, fetchImpl = fetch }) {
   await warnAboutLegacyPackageNames(pool, log);
   const executeBatch = createEffects(pool, log, fetchImpl);
   const limiter = createRateLimiter();
+  const avatars = createAvatarCache(fetchImpl);
 
   function clientIp(req) {
     if (config.trustProxy) {
@@ -160,6 +162,13 @@ export async function createApp({ config, log, fetchImpl = fetch }) {
     const bucket = method === 'POST' || url.pathname.startsWith('/auth') || url.pathname.endsWith('/download') ? 'write' : 'read';
     if (!limiter.allow(`${bucket}:${ip}`, bucket === 'write' ? config.rateLimitWrite : config.rateLimitRead)) {
       return send(req, res, 429, { 'Content-Type': 'text/plain', 'Retry-After': '60' }, 'Too many requests. Please slow down.');
+    }
+
+    if (url.pathname.startsWith('/avatar/')) {
+      const login = url.pathname.slice('/avatar/'.length); // percent-escapes never match a valid login
+      const avatar = method === 'GET' && isAvatarLogin(login) ? await avatars.get(login) : null;
+      if (!avatar) return send(req, res, 404, { 'Content-Type': 'text/plain', 'Cache-Control': 'public, max-age=300' }, 'Not found');
+      return send(req, res, 200, { 'Content-Type': avatar.type, 'Cache-Control': 'public, max-age=86400' }, avatar.data);
     }
 
     const body = method === 'POST' ? await readBody(req) : '';

@@ -52,6 +52,7 @@ const release = (tag, extra = {}) => ({
 });
 const FIXTURES = {
   'POST https://github.com/login/oauth/access_token': (opts) => json({ access_token: `tok-${JSON.parse(opts.body).code}` }),
+  'GET https://github.com/testadmin.png?size=64': () => new Response(Buffer.from('PNGDATA'), { status: 200, headers: { 'Content-Type': 'image/png' } }),
   'GET https://api.github.com/user': (opts) => json(USERS[opts.headers.Authorization.replace('Bearer ', '')]),
   'GET https://api.github.com/users/testadmin/repos?per_page=100&sort=pushed&type=owner': () =>
     json([
@@ -211,6 +212,20 @@ describe('Spice Rack', { skip }, () => {
     has(css.text, /--accent/);
     assert.equal((await anon.get('/healthz')).status, 200);
     assert.equal((await anon.get('/nope')).status, 404);
+  });
+
+  it('serves avatars from our own origin with a long cache lifetime', async () => {
+    const before = requestsSeen.length;
+    const first = await anon.get('/avatar/testadmin');
+    assert.equal(first.status, 200);
+    has(first.headers.get('content-type'), /^image\/png/);
+    has(first.headers.get('cache-control'), /max-age=86400/);
+    assert.equal(first.text, 'PNGDATA');
+    await anon.get('/avatar/TestAdmin');
+    assert.equal(requestsSeen.slice(before).filter((k) => k.includes('testadmin.png')).length, 1, 'second request is served from the cache');
+    assert.equal((await anon.get('/avatar/nobody')).status, 404);
+    assert.equal((await anon.get('/avatar/..%2Fetc')).status, 404);
+    assert.equal((await anon.get('/avatar/-bad')).status, 404);
   });
 
   it('rejects bad OAuth callbacks', async () => {
