@@ -72,15 +72,36 @@ const FIXTURES = {
   'GET https://api.github.com/repos/testadmin/json-parser/releases?per_page=30': () =>
     json([release('v1.2.0'), release('v1.1.0', { published_at: '2026-08-01T10:00:00Z' }), release('v2.0.0-rc.1', { prerelease: true }), release('nightly')]),
   'GET https://api.github.com/repos/testadmin/http-client/releases?per_page=30': () => json([release('v1.0.0')]),
-  'GET https://raw.githubusercontent.com/testadmin/json-parser/v1.2.0/spice.json': () =>
-    json({ dependencies: { 'http-client': '^1.0.0', ghost: '>=1.0.0' }, devDependencies: { 'test-kit': '*' } }),
-  'GET https://raw.githubusercontent.com/testadmin/http-client/v1.0.0/spice.json': () =>
-    json({ dependencies: { 'tls-lib': '^2.0.0', 'json-parser': '*' } }),
-  'GET https://raw.githubusercontent.com/testadmin/json-parser/v1.1.0/spice.json': () => json({ dependencies: {} }),
-  'GET https://raw.githubusercontent.com/testadmin/json-parser/v2.0.0-rc.1/spice.json': () => new Response('nope', { status: 404 }),
+  'GET https://raw.githubusercontent.com/testadmin/json-parser/v1.2.0/spice.toml': () =>
+    toml(`# json-parser
+[package]
+name = "json-parser"
+version = "1.2.0"
+spice = ">=0.29.0"
+
+[dependencies]
+http-client = "^1.0.0" # short form
+ghost = { version = ">=1.0.0" }
+http-utils = { github = "owner/Http-Utils", rev = "v1.0.0" }
+
+[ dev-dependencies ]
+test-kit = "*"
+
+[tool.some-linter]
+max-line = 120
+ratio = -1.5e3
+`),
+  'GET https://raw.githubusercontent.com/testadmin/http-client/v1.0.0/spice.toml': () =>
+    toml('[package]\nname = "http-client"\nversion = "1.0.0"\n\n[dependencies]\ntls-lib = "^2.0.0"\njson-parser = "*"\n'),
+  'GET https://raw.githubusercontent.com/testadmin/json-parser/v1.1.0/spice.toml': () =>
+    toml('[package]\nname = "json-parser"\nversion = "1.1.0"\n'),
+  'GET https://raw.githubusercontent.com/testadmin/json-parser/v2.0.0-rc.1/spice.toml': () => new Response('nope', { status: 404 }),
 };
 function json(value) {
   return new Response(JSON.stringify(value), { status: 200, headers: { 'Content-Type': 'application/json' } });
+}
+function toml(value) {
+  return new Response(value, { status: 200, headers: { 'Content-Type': 'text/plain' } });
 }
 function html(value) {
   return new Response(value, { status: 200, headers: { 'Content-Type': 'text/html' } });
@@ -332,6 +353,7 @@ describe('Spice Rack', { skip }, () => {
     has(page.text, /href="\/packages\?tag=parser"/);
     has(page.text, /MIT/);
     has(page.text, /Package created/);
+    has(page.text, /json-parser = "\^1\.2\.0"/);
 
     const versions = await anon.get('/packages/json-parser?tab=versions');
     has(versions.text, /<h3>v1\.2\.0<\/h3>/);
@@ -349,6 +371,7 @@ describe('Spice Rack', { skip }, () => {
     has(deps.text, /not found/);
     has(deps.text, /Development dependencies/);
     has(deps.text, /test-kit/);
+    lacks(deps.text, /http-utils/);
     // nested level, with the cycle back to json-parser cut off
     has(deps.text, /<details open><summary>[^]*http-client[^]*<\/summary><ul class="dep-tree">[^]*tls-lib/);
     const tree = deps.text.split('<h2>Dependency tree</h2>')[1].split('<h3>Development')[0];

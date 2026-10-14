@@ -1,4 +1,6 @@
 import "std/data/vector";
+import "std/text/toml/toml-value";
+import "std/text/toml/toml-parser";
 import "./util";
 import "./json";
 import "./semver";
@@ -9,12 +11,12 @@ import "./core";
 //
 // A sync consists of three effect batches, which handlers place at consecutive steps (see the *Batch functions):
 //   1. fetch   repository info, README (rendered HTML) and releases (rendered HTML), 3 requests per package
-//   2. manifests   the `spice.json` of the newest releases (declares dependencies)
+//   2. manifests   the `spice.toml` of the newest releases (declares dependencies)
 //   3. write   one transaction that stores everything
 // ---------------------------------------------------------------------------------------------------------------------
 
 public const string GITHUB_API = "https://api.github.com";
-public const string MANIFEST_FILE = "spice.json";
+public const string MANIFEST_FILE = "spice.toml";
 const unsigned long MAX_RELEASES = 30l;
 const unsigned long MAX_MANIFESTS = 10l;
 const unsigned long MAX_README_BYTES = 1500000l;
@@ -162,17 +164,36 @@ public f<Vector<Release>> parseReleases(JV releases, const String& owner, const 
 }
 
 /**
- * Dependencies declared in a spice.json manifest:
- *   { "dependencies": { "other-package": "^1.2.0" }, "devDependencies": { ... } }
+ * Registry dependencies declared in a spice.toml manifest (see the manifest spec of Spice Shaker):
+ *   [dependencies]
+ *   other-package = "^1.2.0"
+ *   another = { version = "~2.0" }
+ *   [dev-dependencies]
+ *   ...
+ * GitHub and path dependencies are not registry dependencies and are skipped. A manifest that is not valid TOML has none.
  */
-public f<Vector<Dependency>> parseManifestDependencies(JV manifest) {
+public f<Vector<Dependency>> parseManifestDependencies(const String& manifestText) {
     Vector<Dependency> deps;
+    Result<TomlValue*> parsed = parseToml(manifestText);
+    if !parsed.isOk() { return deps; }
+    TomlValue* root = parsed.unwrap();
     for int pass = 0; pass < 2; pass++ {
-        JV section = manifest.get(pass == 0 ? "dependencies" : "devDependencies");
-        for JV item = section.first(); item.exists() && deps.getSize() < 100l; item = item.after() {
+        TomlValue* section = root.getFieldOrNil(pass == 0 ? "dependencies" : "dev-dependencies");
+        if section == nil<TomlValue*> || !section.isTable() { continue; }
+        for unsigned long i = 0l; i < section.getTableSize() && deps.getSize() < 100l; i++ {
+            TomlValue* spec = section.getTableValue(i);
+            String rawConstraint;
+            if spec.isString() {
+                rawConstraint = spec.getString();
+            } else if spec.isTable() && !spec.hasField("github") && !spec.hasField("path") {
+                TomlValue* version = spec.getFieldOrNil("version");
+                if version == nil<TomlValue*> || !version.isString() { continue; }
+                rawConstraint = version.getString();
+            } else {
+                continue;
+            }
             Dependency dep;
-            dep.name = lower(item.keyName());
-            const String rawConstraint = item.str();
+            dep.name = section.getTableKey(i);
             dep.constraint = rawConstraint.trim();
             if dep.constraint.isEmpty() || dep.constraint.getLength() > 64l { dep.constraint = String("*"); }
             dep.dev = pass == 1;
@@ -184,6 +205,7 @@ public f<Vector<Dependency>> parseManifestDependencies(JV manifest) {
             if !duplicate { deps.pushBack(dep); }
         }
     }
+    deleteTomlValue(root);
     return deps;
 }
 
@@ -347,8 +369,7 @@ public f<String> syncWriteBatch(const Ctx& ctx, const Vector<SyncJob>& jobs, int
                         batch.simple("SET @vid = LAST_INSERT_ID()");
                         batch.simple("DELETE FROM package_dependencies WHERE version_id = @vid");
                         if status == 200l {
-                            JV manifest = parseJson(manifestResponse.getStr("body"));
-                            const Vector<Dependency> deps = parseManifestDependencies(manifest);
+                            const Vector<Dependency> deps = parseManifestDependencies(manifestResponse.getStr("body"));
                             for unsigned long d = 0l; d < deps.getSize(); d++ {
                                 Sql dep = Sql("INSERT INTO package_dependencies (version_id, dep_name, constraint_text, dev) VALUES (@vid, ");
                                 dep.ps(deps.get(d).name);
@@ -426,12 +447,27 @@ f<bool> testParseReleases() {
 
 #[test]
 f<bool> testParseManifest() {
-    JV manifest = parseJson(String("{\"name\":\"x\",\"dependencies\":{\"Json-Parser\":\"^1.2.0\",\"bad name\":\"1\"},\"devDependencies\":{\"test-kit\":\"*\"}}"));
+    String manifest = String("# A comment\n[package]\nname = \"x\"\nversion = \"0.1.0\"\n\n");
+    manifest += "[dependencies]\n";
+    manifest += "json-parser = \"^1.2.0\"  # short form\n";
+    manifest += "http-client = { version = \" >=1.0, <2 \" }\n";
+    manifest += "http-utils = { github = \"owner/Http-Utils\", rev = \"v1.0.0\" }\n";
+    manifest += "my-local = { path = \"../my-local\" }\n";
+    manifest += "Bad_Name = \"1\"\n";
+    manifest += "\n[dev-dependencies]\ntest-kit = \"~1.2.0\"\njson-parser = \"*\"\n";
+    manifest += "\n[tool.some-linter]\nmax-line = 120\n";
     const Vector<Dependency> deps = parseManifestDependencies(manifest);
-    assert deps.getSize() == 2l;
+    assert deps.getSize() == 3l;
     assert deps.get(0l).name == "json-parser";
     assert deps.get(0l).constraint == "^1.2.0";
     assert !deps.get(0l).dev;
-    assert deps.get(1l).dev;
+    assert deps.get(1l).name == "http-client";
+    assert deps.get(1l).constraint == ">=1.0, <2";
+    assert deps.get(2l).name == "test-kit";
+    assert deps.get(2l).dev;
+
+    // Old JSON manifests and other broken files declare nothing
+    const Vector<Dependency> none = parseManifestDependencies(String("{ \"dependencies\": { \"json-parser\": \"^1.2.0\" } }"));
+    assert none.getSize() == 0l;
     return true;
 }

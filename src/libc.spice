@@ -145,3 +145,82 @@ public f<int> fprintf(byte* stream, string format, byte* args) { return 0; }
 
 #[core.compiler.mangle = false]
 public f<unsigned int> fwrite(byte* data, unsigned int size, unsigned int count, byte* stream) { return count; }
+
+/**
+ * Value of a digit or letter in bases up to 36, or 99 for anything else
+ */
+f<int> digitValue(byte b) {
+    const int c = cast<int>(b);
+    if c >= 48 && c <= 57 { return c - 48; }
+    if c >= 97 && c <= 122 { return c - 97 + 10; }
+    if c >= 65 && c <= 90 { return c - 65 + 10; }
+    return 99;
+}
+
+// Used by the TOML parser of the std for integers. The end pointer is not supported, the std never asks for it.
+#[core.compiler.mangle = false]
+public f<long> strtoll(string s, char** end, int base) {
+    long value = 0l;
+    unsafe {
+        byte* bytes = cast<byte*>(s);
+        unsigned long i = 0l;
+        while bytes[i] == cast<byte>(32) || bytes[i] == cast<byte>(9) { i++; }
+        const bool negative = bytes[i] == cast<byte>(45);
+        if negative || bytes[i] == cast<byte>(43) { i++; }
+        while digitValue(bytes[i]) < base {
+            value = value * cast<long>(base) + cast<long>(digitValue(bytes[i]));
+            i++;
+        }
+        if negative { value = -value; }
+    }
+    return value;
+}
+
+// Used by the TOML parser of the std for floats ("1.5", "-2e10", "inf", "nan"). Exact rounding is not needed here.
+#[core.compiler.mangle = false]
+public f<double> strtod(string s, char** end) {
+    double value = 0.0;
+    unsafe {
+        byte* bytes = cast<byte*>(s);
+        unsigned long i = 0l;
+        while bytes[i] == cast<byte>(32) || bytes[i] == cast<byte>(9) { i++; }
+        const bool negative = bytes[i] == cast<byte>(45);
+        if negative || bytes[i] == cast<byte>(43) { i++; }
+        double zero = 0.0;
+        if digitValue(bytes[i]) == 23 && digitValue(bytes[i + 1l]) == 10 {  // "nan"
+            return zero / zero;
+        }
+        if digitValue(bytes[i]) == 18 && digitValue(bytes[i + 1l]) == 23 {  // "inf"
+            value = 1.0 / zero;
+        } else {
+            while digitValue(bytes[i]) < 10 {
+                value = value * 10.0 + cast<double>(digitValue(bytes[i]));
+                i++;
+            }
+            int exponent = 0;
+            if bytes[i] == cast<byte>(46) {
+                i++;
+                while digitValue(bytes[i]) < 10 {
+                    value = value * 10.0 + cast<double>(digitValue(bytes[i]));
+                    exponent--;
+                    i++;
+                }
+            }
+            if digitValue(bytes[i]) == 14 {  // 'e' or 'E'
+                i++;
+                const bool negativeExp = bytes[i] == cast<byte>(45);
+                if negativeExp || bytes[i] == cast<byte>(43) { i++; }
+                int given = 0;
+                while digitValue(bytes[i]) < 10 && given < 10000 {
+                    given = given * 10 + digitValue(bytes[i]);
+                    i++;
+                }
+                exponent += negativeExp ? -given : given;
+            }
+            while exponent > 0 { value *= 10.0; exponent--; }
+            while exponent < 0 { value /= 10.0; exponent++; }
+        }
+        if negative { value = -value; }
+    }
+    return value;
+}
