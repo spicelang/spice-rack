@@ -185,11 +185,11 @@ public f<String> handleAdminPackages(Ctx& ctx) {
         Batch batch;
         const String like = String("%") + likeEscape(q) + "%";
         Sql count = Sql("SELECT COUNT(*) AS total FROM packages p JOIN users u ON u.id = p.owner_id WHERE 1 = 1");
-        if !q.isEmpty() { count.sql(" AND (p.name LIKE "); count.ps(like); count.sql(" OR u.login LIKE "); count.ps(like); count.sql(" OR p.repo_name LIKE "); count.ps(like); count.sql(")"); }
+        if !q.isEmpty() { count.sql(" AND (p.name LIKE "); count.ps(like); count.sql(" OR u.login LIKE "); count.ps(like); count.sql(" OR p.repo_name LIKE "); count.ps(like); count.sql(" OR p.repo_path LIKE "); count.ps(like); count.sql(")"); }
         batch.query(count);
-        Sql list = Sql("SELECT p.name, p.repo_owner, p.repo_name, p.downloads_total, p.synced_at, p.created_at, u.login AS owner_login, lv.version AS latest_version " +
+        Sql list = Sql("SELECT p.name, p.repo_owner, p.repo_name, p.repo_path, p.downloads_total, p.synced_at, p.created_at, u.login AS owner_login, lv.version AS latest_version " +
                        String("FROM packages p JOIN users u ON u.id = p.owner_id LEFT JOIN package_versions lv ON lv.id = p.latest_version_id WHERE 1 = 1"));
-        if !q.isEmpty() { list.sql(" AND (p.name LIKE "); list.ps(like); list.sql(" OR u.login LIKE "); list.ps(like); list.sql(" OR p.repo_name LIKE "); list.ps(like); list.sql(")"); }
+        if !q.isEmpty() { list.sql(" AND (p.name LIKE "); list.ps(like); list.sql(" OR u.login LIKE "); list.ps(like); list.sql(" OR p.repo_name LIKE "); list.ps(like); list.sql(" OR p.repo_path LIKE "); list.ps(like); list.sql(")"); }
         list.sql(" ORDER BY p.created_at DESC, p.id DESC LIMIT ");
         list.pn(ADMIN_PAGE_SIZE);
         list.sql(" OFFSET ");

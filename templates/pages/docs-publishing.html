@@ -1,6 +1,6 @@
 <div class="container narrow section prose">
     <h1>Publishing a package</h1>
-    <p class="lead">A package on the registry is a GitHub repository. Releases of the repository are the versions of the package.</p>
+    <p class="lead">A package on the registry is a GitHub repository, or a directory in one. Releases of the repository are the versions of the package.</p>
     <ol class="steps">
         <li><h2>Sign in</h2><p><a href="/auth/github">Sign in with GitHub</a>. The registry only asks for your public profile.</p></li>
         <li><h2>Describe your dependencies</h2><p>Add a <code>spice.toml</code> manifest to the root of your repository, for example with <code>spice-shaker init</code>. It is optional, but needed for the dependency tree:</p>
@@ -19,6 +19,9 @@ test-kit = "*"</code></pre>
         <li><h2>Create the package</h2><p>Open the <a href="/dashboard/packages/new">dashboard</a>, pick your repository and choose a name and a few tags. You need push access to the repository.</p></li>
         <li><h2>Keep it in sync</h2><p>The registry re-reads README, releases and dependencies regularly. After a release you can also hit <em>Sync now</em> on the package management page.</p></li>
     </ol>
+    <h2>Several packages in one repository</h2>
+    <p>A repository can hold several packages, each in its own directory with its own <code>spice.toml</code> and README, for example <code>packages/github</code>. Enter that directory when you create the package (or paste the link of the directory on GitHub as repository).</p>
+    <p>The releases of the repository are shared, so the tag of a release names the package's directory, followed by <code>-</code>, <code>/</code> or <code>@</code> and the version: <code>github-v1.0.0</code>, <code>github/v1.0.0</code>, <code>github@1.0.0</code> or, with the full path, <code>packages/github/v1.0.0</code>. Each package only sees its own releases. The description comes from the <code>description</code> in the <code>[package]</code> table of the manifest instead of the repository.</p>
     <h2>Version constraints</h2>
     <table class="table">
         <thead><tr><th>Constraint</th><th>Matches</th></tr></thead>
@@ -39,4 +42,5 @@ test-kit = "*"</code></pre>
         <li><code>GET /api/v1/packages/{name}/versions/{version}</code> (use <code>latest</code> for the newest release)</li>
         <li><code>GET /api/v1/packages/{name}/versions/{version}/download</code> counts the download and redirects to the archive</li>
     </ul>
+    <p>The archive is the whole repository at the release tag. For a package in a directory, <code>path</code> in the package metadata says where it is inside the archive.</p>
 </div>

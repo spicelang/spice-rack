@@ -11,7 +11,7 @@
             {% for pk in packages %}
             <tr>
                 <td><a href="/packages/{{ pk.name|url }}"><strong>{{ pk.name }}</strong></a></td><td>{{ pk.owner_login }}</td>
-                <td><a href="https://github.com/{{ pk.repo_owner|url }}/{{ pk.repo_name|url }}" rel="noopener">{{ pk.repo_owner }}/{{ pk.repo_name }}</a></td>
+                <td><a href="https://github.com/{{ pk.repo_owner|url }}/{{ pk.repo_name|url }}{% if pk.repo_path %}/tree/HEAD/{{ pk.repo_path }}{% endif %}" rel="noopener">{{ pk.repo_owner }}/{{ pk.repo_name }}{% if pk.repo_path %}/{{ pk.repo_path }}{% endif %}</a></td>
                 <td>{% if pk.latest_version %}v{{ pk.latest_version }}{% else %}&ndash;{% endif %}</td><td class="num">{{ pk.downloads_total|thousands }}</td>
                 <td>{% if pk.synced_at %}{{ pk.synced_at|date }}{% else %}never{% endif %}</td>
                 <td class="actions"><a class="btn btn-small" href="/admin/packages/{{ pk.name|url }}">Edit</a></td>

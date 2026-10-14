@@ -13,11 +13,17 @@ import "./core";
 //   1. fetch   repository info, README (rendered HTML) and releases (rendered HTML), 3 requests per package
 //   2. manifests   the `spice.toml` of the newest releases (declares dependencies)
 //   3. write   one transaction that stores everything
+//
+// A package lives at the root of its repository or in a subdirectory (`path`), so that one repository can hold several
+// packages. The releases of a package in a subdirectory are the ones whose tag names the directory, see `tagVersionPart`.
 // ---------------------------------------------------------------------------------------------------------------------
 
 public const string GITHUB_API = "https://api.github.com";
 public const string MANIFEST_FILE = "spice.toml";
 const unsigned long MAX_RELEASES = 30l;
+// The releases of a repository with several packages are shared by all of them, so more are fetched to find 30 of one package
+const unsigned long RELEASES_PER_PAGE = 30l;
+const unsigned long SHARED_RELEASES_PER_PAGE = 100l;
 const unsigned long MAX_MANIFESTS = 10l;
 const unsigned long MAX_README_BYTES = 1500000l;
 
@@ -25,6 +31,7 @@ public type SyncJob struct {
     public long packageId = 0l
     public String owner
     public String repo
+    public String path // Directory of the package in the repository, empty for the root
 }
 
 public type Release struct {
@@ -82,6 +89,38 @@ public f<String> repoApiUrl(const String& owner, const String& repo) {
 }
 
 /**
+ * "packages/github" -> "packages/github/", "" -> ""
+ */
+f<String> dirPrefix(const String& path) {
+    if path.isEmpty() { return String(""); }
+    return path + "/";
+}
+
+/**
+ * The rest of `tag` after `prefix` and one of the separators '/', '-' and '@', or the empty string if it does not start so
+ */
+f<String> versionAfterPrefix(const String& tag, const String& prefix) {
+    const unsigned long len = prefix.getLength();
+    if tag.getLength() <= len + 1l || head(tag, len) != prefix { return String(""); }
+    const char separator = tag[len];
+    if separator != '/' && separator != '-' && separator != '@' { return String(""); }
+    return tail(tag, len + 1l);
+}
+
+/**
+ * The part of a release tag that holds the version. Tags of a package at the repository root are versions themselves
+ * ("v1.2.0"). Tags of a package in a subdirectory start with the directory, as full path or only its last segment, and one
+ * of '/', '-' and '@': "github-v1.2.0", "github/v1.2.0", "github@1.2.0", "packages/github/v1.2.0". For tags of other
+ * packages of the repository the result is empty.
+ */
+public f<String> tagVersionPart(const String& tag, const String& path) {
+    if path.isEmpty() { return tag; }
+    const String afterPath = versionAfterPrefix(tag, path);
+    if !afterPath.isEmpty() { return afterPath; }
+    return versionAfterPrefix(tag, lastPathSegment(path));
+}
+
+/**
  * Whether `text` contains `needle` at offset `at` (no temporary strings, README files can be large)
  */
 f<bool> matchesAt(const String& text, unsigned long at, string needle) {
@@ -95,11 +134,13 @@ f<bool> matchesAt(const String& text, unsigned long at, string needle) {
 
 /**
  * GitHub renders relative links of a README relative to the repository. On the registry they have to point back
- * to GitHub: images to the raw files, everything else to the file view.
+ * to GitHub: images to the raw files, everything else to the file view. Relative links of a README in a subdirectory
+ * (`path`) start there, links with a leading '/' at the repository root.
  */
-public f<String> rewriteRelativeLinks(const String& html, const String& owner, const String& repo) {
+public f<String> rewriteRelativeLinks(const String& html, const String& owner, const String& repo, const String& path) {
     const String rawBase = String("https://raw.githubusercontent.com/") + owner + "/" + repo + "/HEAD/";
     const String blobBase = String("https://github.com/") + owner + "/" + repo + "/blob/HEAD/";
+    const String dir = dirPrefix(path);
     String out;
     out.reserve(html.getLength() + 64l);
     const unsigned long len = html.getLength();
@@ -122,6 +163,7 @@ public f<String> rewriteRelativeLinks(const String& html, const String& owner, c
             unsigned long from = valueStart;
             if !absolute {
                 out += isSrc ? rawBase : blobBase;
+                if html[from] != '/' { out += dir; }
                 while from < cast<unsigned long>(close) && html[from] == '/' { from++; }
                 if matchesAt(html, from, "./") { from += 2l; }
             }
@@ -136,15 +178,16 @@ public f<String> rewriteRelativeLinks(const String& html, const String& owner, c
 }
 
 /**
- * Releases of a repository as returned by the releases API. Drafts and tags that are not semantic versions are skipped.
+ * Releases of a repository as returned by the releases API. Drafts, tags that are not semantic versions and, for a package
+ * in a subdirectory (`path`), the releases of other packages are skipped.
  */
-public f<Vector<Release>> parseReleases(JV releases, const String& owner, const String& repo) {
+public f<Vector<Release>> parseReleases(JV releases, const String& owner, const String& repo, const String& path) {
     Vector<Release> list;
     for JV item = releases.first(); item.exists() && list.getSize() < MAX_RELEASES; item = item.after() {
         if item.getBool("draft") { continue; }
         Release release;
         release.tag = item.getStr("tag_name");
-        const Semver parsed = parseSemver(release.tag);
+        const Semver parsed = parseSemver(tagVersionPart(release.tag, path));
         if !parsed.valid { continue; }
         release.version = parsed.toString();
         release.title = item.getStr("name");
@@ -210,6 +253,26 @@ public f<Vector<Dependency>> parseManifestDependencies(const String& manifestTex
 }
 
 /**
+ * `description` of the [package] table of a spice.toml manifest, empty if it has none
+ */
+public f<String> parseManifestDescription(const String& manifestText) {
+    String description;
+    Result<TomlValue*> parsed = parseToml(manifestText);
+    if !parsed.isOk() { return description; }
+    TomlValue* root = parsed.unwrap();
+    TomlValue* packageTable = root.getFieldOrNil("package");
+    if packageTable != nil<TomlValue*> && packageTable.isTable() {
+        TomlValue* value = packageTable.getFieldOrNil("description");
+        if value != nil<TomlValue*> && value.isString() {
+            const String raw = value.getString();
+            description = head(raw.trim(), 500l);
+        }
+    }
+    deleteTomlValue(root);
+    return description;
+}
+
+/**
  * Index of the release that should be the package's latest version: the highest stable one, or if there is none,
  * the highest pre-release. Returns -1 for an empty list.
  */
@@ -223,6 +286,10 @@ public f<long> pickLatestRelease(const Vector<Release>& releases) {
 // Sync batches
 // ---------------------------------------------------------------------------------------------------------------------
 
+f<unsigned long> releasesPerPage(const SyncJob& job) {
+    return job.path.isEmpty() ? RELEASES_PER_PAGE : SHARED_RELEASES_PER_PAGE;
+}
+
 /**
  * Batch 1: repo, readme and releases for every job
  */
@@ -231,24 +298,29 @@ public f<String> syncFetchBatch(const Ctx& ctx, const Vector<SyncJob>& jobs) {
     for unsigned long i = 0l; i < jobs.getSize(); i++ {
         const SyncJob& job = jobs.get(i);
         const String base = repoApiUrl(job.owner, job.repo);
+        const String readmeDir = job.path.isEmpty() ? String("") : String("/") + job.path;
         batch.http("GET", base, String("application/vnd.github+json"), ctx.config.githubApiToken);
-        batch.http("GET", base + "/readme", String("application/vnd.github.html+json"), ctx.config.githubApiToken);
-        batch.http("GET", base + "/releases?per_page=30", String("application/vnd.github.html+json"), ctx.config.githubApiToken);
+        batch.http("GET", base + "/readme" + readmeDir, String("application/vnd.github.html+json"), ctx.config.githubApiToken);
+        batch.http("GET", base + "/releases?per_page=" + fmtLong(cast<long>(releasesPerPage(job))), String("application/vnd.github.html+json"), ctx.config.githubApiToken);
     }
     return batch.finish();
 }
 
 /**
- * Releases of job `jobIdx`, taken from the fetch batch at handler batch index `fetchBatch`
+ * Releases of job `jobIdx`, taken from the fetch batch at handler batch index `fetchBatch`. `complete` tells whether
+ * these are all releases of the package, so that versions missing from the list were deleted on GitHub.
  */
-public f<Vector<Release>> syncReleasesOf(const Ctx& ctx, int fetchBatch, unsigned long jobIdx, const SyncJob& job) {
+public f<Vector<Release>> syncReleasesOf(const Ctx& ctx, int fetchBatch, unsigned long jobIdx, const SyncJob& job, bool& complete) {
+    complete = false;
     JV response = ctx.res(fetchBatch, jobIdx * 3l + 2l);
     if response.getNum("status") != 200l {
         Vector<Release> none;
         return none;
     }
     JV body = parseJson(response.getStr("body"));
-    return parseReleases(body, job.owner, job.repo);
+    const Vector<Release> releases = parseReleases(body, job.owner, job.repo, job.path);
+    complete = body.size() < releasesPerPage(job) && releases.getSize() < MAX_RELEASES;
+    return releases;
 }
 
 /**
@@ -258,10 +330,11 @@ public f<String> syncManifestBatch(const Ctx& ctx, const Vector<SyncJob>& jobs, 
     Batch batch;
     for unsigned long i = 0l; i < jobs.getSize(); i++ {
         const SyncJob& job = jobs.get(i);
-        const Vector<Release> releases = syncReleasesOf(ctx, fetchBatch, i, job);
+        bool complete = false;
+        const Vector<Release> releases = syncReleasesOf(ctx, fetchBatch, i, job, complete);
         for unsigned long k = 0l; k < releases.getSize() && k < MAX_MANIFESTS; k++ {
             const String url = String("https://raw.githubusercontent.com/") + urlEncode(job.owner) + "/" + urlEncode(job.repo) + "/" +
-                               urlEncode(releases.get(k).tag) + "/" + MANIFEST_FILE;
+                               urlEncode(releases.get(k).tag) + "/" + dirPrefix(job.path) + MANIFEST_FILE;
             batch.http("GET", url, String(""), String(""));
         }
     }
@@ -280,7 +353,8 @@ public f<String> syncWriteBatch(const Ctx& ctx, const Vector<SyncJob>& jobs, int
         const SyncJob& job = jobs.get(i);
         JV repoInfo = ctx.res(fetchBatch, i * 3l);
         JV readme = ctx.res(fetchBatch, i * 3l + 1l);
-        const Vector<Release> releases = syncReleasesOf(ctx, fetchBatch, i, job);
+        bool releasesComplete = false;
+        const Vector<Release> releases = syncReleasesOf(ctx, fetchBatch, i, job, releasesComplete);
         JV releasesResponse = ctx.res(fetchBatch, i * 3l + 2l);
         const bool releasesOk = releasesResponse.getNum("status") == 200l;
         const unsigned long manifestCount = releases.getSize() < MAX_MANIFESTS ? releases.getSize() : MAX_MANIFESTS;
@@ -298,13 +372,14 @@ public f<String> syncWriteBatch(const Ctx& ctx, const Vector<SyncJob>& jobs, int
                 String spdx = license.getStr("spdx_id");
                 if spdx == "NOASSERTION" { spdx = String(""); }
                 sql.s(head(spdx, 64l));
+                // Description and homepage of a repository with several packages describe the repository, not the package
                 const String description = info.getStr("description");
-                if !description.isEmpty() {
+                if !description.isEmpty() && job.path.isEmpty() {
                     sql.sql(", description = IF(description = '', ?, description)");
                     sql.s(head(description, 500l));
                 }
                 const String homepage = info.getStr("homepage");
-                if isHttpUrl(homepage) && homepage.getLength() <= 255l {
+                if isHttpUrl(homepage) && homepage.getLength() <= 255l && job.path.isEmpty() {
                     sql.sql(", homepage = IF(homepage = '', ?, homepage)");
                     sql.s(homepage);
                 }
@@ -312,7 +387,7 @@ public f<String> syncWriteBatch(const Ctx& ctx, const Vector<SyncJob>& jobs, int
             const String readmeBody = readme.getStr("body");
             if readme.getNum("status") == 200l && readmeBody.getLength() <= MAX_README_BYTES {
                 sql.sql(", readme_html = ?");
-                sql.s(rewriteRelativeLinks(readmeBody, job.owner, job.repo));
+                sql.s(rewriteRelativeLinks(readmeBody, job.owner, job.repo, job.path));
             } else if readme.getNum("status") == 404l {
                 sql.sql(", readme_html = NULL");
             }
@@ -322,8 +397,8 @@ public f<String> syncWriteBatch(const Ctx& ctx, const Vector<SyncJob>& jobs, int
         }
 
         if releasesOk {
-            // Mirror what GitHub has: drop versions that no longer exist
-            {
+            // Mirror what GitHub has: drop versions that no longer exist. That is only known if the list is complete.
+            if releasesComplete {
                 Sql sql = Sql("DELETE FROM package_versions WHERE package_id = ");
                 sql.pn(job.packageId);
                 if releases.getSize() > 0l {
@@ -336,6 +411,7 @@ public f<String> syncWriteBatch(const Ctx& ctx, const Vector<SyncJob>& jobs, int
                 }
                 batch.query(sql);
             }
+            const unsigned long manifestStart = manifestIdx;
             for unsigned long k = 0l; k < releases.getSize(); k++ {
                 const Release& rel = releases.get(k);
                 Sql sql = Sql("INSERT INTO package_versions (package_id, version, tag_name, title, changelog, changelog_html, prerelease, tarball_url, published_at) VALUES (");
@@ -396,6 +472,16 @@ public f<String> syncWriteBatch(const Ctx& ctx, const Vector<SyncJob>& jobs, int
                 sql.ps(best.version);
                 sql.sql("), updated_at = ");
                 sql.ps(best.publishedAt);
+                // A package in a subdirectory takes its description from its manifest instead of the repository
+                if !job.path.isEmpty() && cast<unsigned long>(latest) < manifestCount {
+                    JV manifestResponse = ctx.res(manifestBatch, manifestStart + cast<unsigned long>(latest));
+                    const String description = manifestResponse.getNum("status") == 200l ? parseManifestDescription(manifestResponse.getStr("body")) : String("");
+                    if !description.isEmpty() {
+                        sql.sql(", description = IF(description = '', ");
+                        sql.ps(description);
+                        sql.sql(", description)");
+                    }
+                }
             } else {
                 sql.sql("NULL");
             }
@@ -423,9 +509,13 @@ f<bool> testToDbTime() {
 #[test]
 f<bool> testRewriteRelativeLinks() {
     const String html = String("<a href=\"docs/a.md\">a</a><img src=\"/img/x.png\"><a href=\"https://x.org\">x</a><a href=\"#top\">t</a>");
-    const String rewritten = rewriteRelativeLinks(html, String("o"), String("r"));
+    const String rewritten = rewriteRelativeLinks(html, String("o"), String("r"), String(""));
     assert rewritten == "<a href=\"https://github.com/o/r/blob/HEAD/docs/a.md\">a</a><img src=\"https://raw.githubusercontent.com/o/r/HEAD/img/x.png\">" +
                         String("<a href=\"https://x.org\">x</a><a href=\"#top\">t</a>");
+    // In a subdirectory, links start there unless they begin with '/'
+    const String nested = rewriteRelativeLinks(html, String("o"), String("r"), String("packages/a"));
+    assert nested == "<a href=\"https://github.com/o/r/blob/HEAD/packages/a/docs/a.md\">a</a><img src=\"https://raw.githubusercontent.com/o/r/HEAD/img/x.png\">" +
+                     String("<a href=\"https://x.org\">x</a><a href=\"#top\">t</a>");
     return true;
 }
 
@@ -434,7 +524,7 @@ f<bool> testParseReleases() {
     JV releases = parseJson(String("[{\"tag_name\":\"v1.2.0\",\"name\":\"Big\",\"body\":\"- a\",\"body_html\":\"<ul></ul>\",\"draft\":false,\"prerelease\":false,\"published_at\":\"2026-09-01T10:00:00Z\"}," +
                                    "{\"tag_name\":\"nightly\",\"draft\":false},{\"tag_name\":\"v1.3.0-rc.1\",\"prerelease\":true,\"published_at\":\"2026-10-01T10:00:00Z\"}," +
                                    "{\"tag_name\":\"v1.0.0\",\"draft\":true}]"));
-    const Vector<Release> list = parseReleases(releases, String("o"), String("r"));
+    const Vector<Release> list = parseReleases(releases, String("o"), String("r"), String(""));
     assert list.getSize() == 2l;
     assert list.get(0l).version == "1.2.0";
     assert list.get(0l).bodyHtml == "<ul></ul>";
@@ -442,6 +532,28 @@ f<bool> testParseReleases() {
     assert list.get(0l).tarballUrl == "https://github.com/o/r/archive/refs/tags/v1.2.0.tar.gz";
     assert list.get(1l).prerelease;
     assert pickLatestRelease(list) == 0l;
+    return true;
+}
+
+#[test]
+f<bool> testReleasesOfSubdirectory() {
+    assert tagVersionPart(String("v1.0.0"), String("")) == "v1.0.0";
+    assert tagVersionPart(String("github-v1.2.0"), String("packages/github")) == "v1.2.0";
+    assert tagVersionPart(String("github/v1.2.0"), String("packages/github")) == "v1.2.0";
+    assert tagVersionPart(String("github@1.2.0"), String("packages/github")) == "1.2.0";
+    assert tagVersionPart(String("packages/github/v1.2.0"), String("packages/github")) == "v1.2.0";
+    assert tagVersionPart(String("v1.2.0"), String("packages/github")) == "";
+    assert tagVersionPart(String("github_v1.2.0"), String("packages/github")) == "";
+    assert tagVersionPart(String("github-"), String("packages/github")) == "";
+
+    JV releases = parseJson(String("[{\"tag_name\":\"github-actions-v2.0.0\"},{\"tag_name\":\"github-v1.1.0\"},{\"tag_name\":\"v3.0.0\"},") +
+                            "{\"tag_name\":\"other/v1.0.0\"},{\"tag_name\":\"packages/github/v1.0.0\"}]");
+    const Vector<Release> list = parseReleases(releases, String("o"), String("r"), String("packages/github"));
+    assert list.getSize() == 2l;
+    assert list.get(0l).version == "1.1.0";
+    assert list.get(0l).tarballUrl == "https://github.com/o/r/archive/refs/tags/github-v1.1.0.tar.gz";
+    assert list.get(1l).version == "1.0.0";
+    assert list.get(1l).tag == "packages/github/v1.0.0";
     return true;
 }
 
@@ -469,5 +581,9 @@ f<bool> testParseManifest() {
     // Old JSON manifests and other broken files declare nothing
     const Vector<Dependency> none = parseManifestDependencies(String("{ \"dependencies\": { \"json-parser\": \"^1.2.0\" } }"));
     assert none.getSize() == 0l;
+
+    assert parseManifestDescription(manifest) == "";
+    assert parseManifestDescription(String("[package]\nname = \"x\"\ndescription = \" Client for the GitHub REST API \"\n")) == "Client for the GitHub REST API";
+    assert parseManifestDescription(String("{}")) == "";
     return true;
 }

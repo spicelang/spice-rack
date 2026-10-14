@@ -124,7 +124,7 @@ public f<String> handlePackagePage(Ctx& ctx, const String& name) {
     const String tab = activeTab(ctx);
     if ctx.step() == 0 {
         Batch batch;
-        Sql info = Sql("SELECT p.id, p.name, p.description, p.repo_owner, p.repo_name, p.homepage, p.license, p.stars, p.downloads_total, p.owner_id, p.created_at, p.updated_at, " +
+        Sql info = Sql("SELECT p.id, p.name, p.description, p.repo_owner, p.repo_name, p.repo_path, p.homepage, p.license, p.stars, p.downloads_total, p.owner_id, p.created_at, p.updated_at, " +
                        String("u.login AS owner_login, lv.version AS latest_version, lv.published_at AS latest_published, ") +
                        "(SELECT GROUP_CONCAT(t.tag ORDER BY t.tag SEPARATOR ',') FROM package_tags t WHERE t.package_id = p.id) AS tags, " +
                        "(SELECT COUNT(DISTINCT dv.package_id) FROM package_dependencies dd JOIN package_versions dv ON dv.id = dd.version_id " +

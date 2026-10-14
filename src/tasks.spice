@@ -18,7 +18,7 @@ public f<String> handleSyncTask(Ctx& ctx) {
     const int step = ctx.step();
     if step == 0 {
         Batch batch;
-        Sql sql = Sql("SELECT id, repo_owner, repo_name FROM packages WHERE synced_at IS NULL OR synced_at < DATE_SUB(");
+        Sql sql = Sql("SELECT id, repo_owner, repo_name, repo_path FROM packages WHERE synced_at IS NULL OR synced_at < DATE_SUB(");
         sql.ps(ctx.now);
         sql.sql(", INTERVAL ");
         sql.pn(SYNC_AFTER_HOURS);
@@ -34,6 +34,7 @@ public f<String> handleSyncTask(Ctx& ctx) {
         job.packageId = row.getNum("id");
         job.owner = row.getStr("repo_owner");
         job.repo = row.getStr("repo_name");
+        job.path = row.getStr("repo_path");
         jobs.pushBack(job);
     }
     if jobs.getSize() == 0l { return ctx.text(200, String("nothing to sync\n")); }
