@@ -72,15 +72,53 @@ const FIXTURES = {
   'GET https://api.github.com/repos/testadmin/json-parser/releases?per_page=30': () =>
     json([release('v1.2.0'), release('v1.1.0', { published_at: '2026-08-01T10:00:00Z' }), release('v2.0.0-rc.1', { prerelease: true }), release('nightly')]),
   'GET https://api.github.com/repos/testadmin/http-client/releases?per_page=30': () => json([release('v1.0.0')]),
-  'GET https://raw.githubusercontent.com/testadmin/json-parser/v1.2.0/spice.json': () =>
-    json({ dependencies: { 'http-client': '^1.0.0', ghost: '>=1.0.0' }, devDependencies: { 'test-kit': '*' } }),
-  'GET https://raw.githubusercontent.com/testadmin/http-client/v1.0.0/spice.json': () =>
-    json({ dependencies: { 'tls-lib': '^2.0.0', 'json-parser': '*' } }),
-  'GET https://raw.githubusercontent.com/testadmin/json-parser/v1.1.0/spice.json': () => json({ dependencies: {} }),
-  'GET https://raw.githubusercontent.com/testadmin/json-parser/v2.0.0-rc.1/spice.json': () => new Response('nope', { status: 404 }),
+  'GET https://raw.githubusercontent.com/testadmin/json-parser/v1.2.0/spice.toml': () =>
+    toml(`# json-parser
+[package]
+name = "json-parser"
+version = "1.2.0"
+spice = ">=0.29.0"
+
+[dependencies]
+http-client = "^1.0.0" # short form
+ghost = { version = ">=1.0.0" }
+http-utils = { github = "owner/Http-Utils", rev = "v1.0.0" }
+
+[ dev-dependencies ]
+test-kit = "*"
+
+[tool.some-linter]
+max-line = 120
+ratio = -1.5e3
+`),
+  'GET https://raw.githubusercontent.com/testadmin/http-client/v1.0.0/spice.toml': () =>
+    toml('[package]\nname = "http-client"\nversion = "1.0.0"\n\n[dependencies]\ntls-lib = "^2.0.0"\njson-parser = "*"\n'),
+  'GET https://raw.githubusercontent.com/testadmin/json-parser/v1.1.0/spice.toml': () =>
+    toml('[package]\nname = "json-parser"\nversion = "1.1.0"\n'),
+  'GET https://raw.githubusercontent.com/testadmin/json-parser/v2.0.0-rc.1/spice.toml': () => new Response('nope', { status: 404 }),
+  // A repository with several packages in subdirectories
+  'GET https://api.github.com/repos/testadmin/packages': () => json(repoInfo('packages')),
+  'GET https://api.github.com/repos/testadmin/packages/contents/packages/github/spice.toml': () => json({ type: 'file' }),
+  'GET https://api.github.com/repos/testadmin/packages/contents/packages/yaml/spice.toml': () => json({ type: 'file' }),
+  'GET https://api.github.com/repos/testadmin/packages/readme/packages/github': () =>
+    html('<h1>github</h1><a href="docs/usage.md">usage</a><img src="/media/logo.png">'),
+  'GET https://api.github.com/repos/testadmin/packages/releases?per_page=100': () =>
+    json([
+      release('yaml-v2.0.0'),
+      release('github-v0.2.0'),
+      release('v9.0.0'),
+      release('github/v0.1.0', { published_at: '2026-08-01T10:00:00Z' }),
+    ]),
+  'GET https://raw.githubusercontent.com/testadmin/packages/github-v0.2.0/packages/github/spice.toml': () =>
+    toml('[package]\nname = "github"\nversion = "0.2.0"\ndescription = "Client for the GitHub REST API"\n\n[dependencies]\njson-parser = "^1.2.0"\n'),
+  'GET https://raw.githubusercontent.com/testadmin/packages/github%2Fv0.1.0/packages/github/spice.toml': () =>
+    toml('[package]\nname = "github"\nversion = "0.1.0"\n'),
 };
 function json(value) {
   return new Response(JSON.stringify(value), { status: 200, headers: { 'Content-Type': 'application/json' } });
+}
+function toml(value) {
+  return new Response(value, { status: 200, headers: { 'Content-Type': 'text/plain' } });
 }
 function html(value) {
   return new Response(value, { status: 200, headers: { 'Content-Type': 'text/html' } });
@@ -320,6 +358,56 @@ describe('Spice Rack', { skip }, () => {
     await admin.post('/dashboard/packages/big-readme', { csrf, action: 'delete', confirm: 'big-readme' });
   });
 
+  it('creates several packages from the directories of one repository', async () => {
+    const csrf = admin.csrf((await admin.get('/dashboard/packages/new')).text);
+    const missing = await admin.post('/dashboard/packages/new', { csrf, repo: 'testadmin/packages', path: 'packages/nope' });
+    assert.equal(missing.status, 409);
+    has(missing.text, /The directory packages\/nope of this repository has no spice.toml/);
+    const badPath = await admin.post('/dashboard/packages/new', { csrf, repo: 'testadmin/packages', path: '../etc' });
+    assert.equal(badPath.status, 400);
+    has(badPath.text, /The directory must be a path/);
+
+    // The link of the directory on GitHub works as well; the name defaults to the directory
+    const github = await admin.post('/dashboard/packages/new', { csrf, repo: 'https://github.com/testadmin/packages/tree/main/packages/github' });
+    assert.equal(github.location, '/packages/github?notice=created', github.text);
+    const yaml = await admin.post('/dashboard/packages/new', { csrf, repo: 'testadmin/packages', path: '/packages/yaml/' });
+    assert.equal(yaml.location, '/packages/yaml?notice=created', yaml.text);
+    const dup = await admin.post('/dashboard/packages/new', { csrf, repo: 'testadmin/packages', path: 'packages/yaml', name: 'yaml-two' });
+    assert.equal(dup.status, 409);
+    has(dup.text, /already exists/);
+
+    // Each package only has the releases tagged with its directory, and its description comes from its manifest
+    const pkg = JSON.parse((await anon.get('/api/v1/packages/github')).text);
+    assert.equal(pkg.package.path, 'packages/github');
+    assert.equal(pkg.package.repository, 'https://github.com/testadmin/packages');
+    assert.equal(pkg.package.description, 'Client for the GitHub REST API');
+    assert.equal(pkg.package.homepage, '');
+    assert.equal(pkg.package.latestVersion, '0.2.0');
+    assert.deepEqual(pkg.versions.map((v) => v.tag), ['github-v0.2.0', 'github/v0.1.0']);
+    assert.deepEqual(pkg.versions[0].dependencies, { 'json-parser': '^1.2.0' });
+    const other = JSON.parse((await anon.get('/api/v1/packages/yaml')).text);
+    assert.deepEqual(other.versions.map((v) => v.version), ['2.0.0']);
+    assert.equal(other.package.description, '');
+    const dl = await anon.get('/api/v1/packages/github/versions/0.1.0/download');
+    assert.equal(dl.location, 'https://github.com/testadmin/packages/archive/refs/tags/github%2Fv0.1.0.tar.gz');
+
+    // README links resolve against the directory, the repository link points to it
+    const page = await anon.get('/packages/github');
+    has(page.text, /href="https:\/\/github.com\/testadmin\/packages\/blob\/HEAD\/packages\/github\/docs\/usage.md"/);
+    has(page.text, /src="https:\/\/raw.githubusercontent.com\/testadmin\/packages\/HEAD\/media\/logo.png"/);
+    has(page.text, /href="https:\/\/github.com\/testadmin\/packages\/tree\/HEAD\/packages\/github"/);
+    has((await anon.get('/packages/yaml')).text, /href="https:\/\/github.com\/testadmin\/packages\/tree\/HEAD\/packages\/yaml"/);
+    has((await admin.get('/dashboard/packages/github')).text, /repository testadmin\/packages, directory packages\/github/);
+    has((await admin.get('/admin/packages?q=packages%2Fyaml')).text, /testadmin\/packages\/packages\/yaml/);
+
+    // A sync keeps it that way
+    await admin.post('/dashboard/packages/github', { csrf, action: 'sync' });
+    const synced = JSON.parse((await anon.get('/api/v1/packages/github')).text);
+    assert.equal(synced.versions.length, 2);
+
+    for (const name of ['github', 'yaml']) await admin.post(`/dashboard/packages/${name}`, { csrf, action: 'delete', confirm: name });
+  });
+
   it('shows the package page with README, versions, dependencies and stats', async () => {
     const page = await anon.get('/packages/json-parser?notice=created');
     assert.equal(page.status, 200);
@@ -332,6 +420,7 @@ describe('Spice Rack', { skip }, () => {
     has(page.text, /href="\/packages\?tag=parser"/);
     has(page.text, /MIT/);
     has(page.text, /Package created/);
+    has(page.text, /json-parser = "\^1\.2\.0"/);
 
     const versions = await anon.get('/packages/json-parser?tab=versions');
     has(versions.text, /<h3>v1\.2\.0<\/h3>/);
@@ -349,6 +438,7 @@ describe('Spice Rack', { skip }, () => {
     has(deps.text, /not found/);
     has(deps.text, /Development dependencies/);
     has(deps.text, /test-kit/);
+    lacks(deps.text, /http-utils/);
     // nested level, with the cycle back to json-parser cut off
     has(deps.text, /<details open><summary>[^]*http-client[^]*<\/summary><ul class="dep-tree">[^]*tls-lib/);
     const tree = deps.text.split('<h2>Dependency tree</h2>')[1].split('<h3>Development')[0];

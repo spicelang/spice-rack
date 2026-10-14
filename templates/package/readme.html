@@ -4,6 +4,6 @@
 <div class="empty">
     <p><strong>No README found.</strong></p>
     <p class="muted">Add a README to the GitHub repository and sync the package to see it here.</p>
-    <p><a class="btn" href="https://github.com/{{ pkg.repo_owner|url }}/{{ pkg.repo_name|url }}" rel="noopener">{% include "icons/github" %}View on GitHub</a></p>
+    <p><a class="btn" href="https://github.com/{{ pkg.repo_owner|url }}/{{ pkg.repo_name|url }}{% if pkg.repo_path %}/tree/HEAD/{{ pkg.repo_path }}{% endif %}" rel="noopener">{% include "icons/github" %}View on GitHub</a></p>
 </div>
 {% endif %}

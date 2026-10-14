@@ -1,7 +1,7 @@
 # Spice Rack
 
 The package registry for the [Spice](https://github.com/spicelang/spice) programming language, meant to run at
-<https://rack.spicelang.com>. Every package is a GitHub repository; its releases are the package versions.
+<https://rack.spicelang.com>. Every package is a GitHub repository (or a directory in one); its releases are the package versions.
 
 ## Features
 
@@ -109,15 +109,32 @@ Without nginx (own proxy): publish port 8080 of `app`, set `TRUST_PROXY=1` only 
 
 ## Publishing a package
 
-Add a `spice.json` to the repository root (optional, it feeds the dependency tree), create a GitHub release with a semver tag
-such as `v1.0.0`, then add the repository in the dashboard. Constraints: `1.2.3`, `^1.2.3`, `~1.2.3`, `1.2.x`, `>=1.0.0, <2.0.0`, `*`.
+Add a `spice.toml` manifest to the repository root (optional, it feeds the dependency tree), create a GitHub release with a semver
+tag such as `v1.0.0`, then add the repository in the dashboard. Constraints: `1.2.3`, `^1.2.3`, `~1.2.3`, `1.2.x`, `>=1.0.0, <2.0.0`, `*`.
 
-```json
-{ "name": "my-package", "dependencies": { "json-parser": "^1.2.0" }, "devDependencies": { "test-kit": "*" } }
+```toml
+[package]
+name = "my-package"
+version = "1.0.0"
+
+[dependencies]
+json-parser = "^1.2.0"
+http-client = { version = ">=2.0.0, <3.0.0" }
+
+[dev-dependencies]
+test-kit = "*"
 ```
 
-The `spice.json` format is defined by this registry (Spice has no package manager manifest yet). Adjust `parseManifestDependencies`
-in `src/github.spice` if the format changes.
+The manifest format is specified by [Spice Shaker](https://github.com/spicelang/spice-shaker), the Spice package manager. The registry
+only lists the registry dependencies of `[dependencies]` and `[dev-dependencies]`; GitHub and path dependencies are skipped. The parsing
+lives in `parseManifestDependencies` in `src/github.spice` and uses the TOML parser of the std (for the wasm build, `src/libc.spice`
+provides the `strtoll`/`strtod` it needs).
+
+**Several packages in one repository** (like [spicelang/packages](https://github.com/spicelang/packages)): every package lives in its
+own directory (`packages/github`) with its own `spice.toml` and README, and is created with that directory (`repo_path`). Its releases
+are the ones whose tag starts with the directory, as full path or last segment, and `-`, `/` or `@`: `github-v1.0.0`, `github/v1.0.0`,
+`github@1.0.0`, `packages/github/v1.0.0`. Its description comes from `[package] description` of the manifest instead of the
+repository. The download is still the archive of the whole repository; the API reports the directory as `path`.
 
 API: `GET /api/v1/packages?q=&tag=&owner=&sort=&page=` · `/api/v1/packages/{name}` · `/api/v1/packages/{name}/versions/{version|latest}`
 · `…/download` (counts the download, redirects to the GitHub archive) · `/api/v1/tags` · `/api/v1/stats`.

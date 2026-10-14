@@ -37,6 +37,7 @@ p writePackageSummary(JsonWriter& w, JV row, const String& baseUrl) {
     w.kStr("name", row.getStr("name"));
     w.kStr("description", row.getStr("description"));
     w.kStr("repository", String("https://github.com/") + row.getStr("repo_owner") + "/" + row.getStr("repo_name"));
+    w.kStr("path", row.getStr("repo_path")); // Directory of the package in the repository (and its archives), "" for the root
     w.kStr("homepage", row.getStr("homepage"));
     w.kStr("license", row.getStr("license"));
     w.kStr("maintainer", row.getStr("owner_login"));
@@ -106,7 +107,7 @@ p writeVersion(JsonWriter& w, JV v, const String& packageName, JV deps) {
 public f<String> handleApiPackage(Ctx& ctx, const String& name) {
     if ctx.step() == 0 {
         Batch batch;
-        Sql info = Sql("SELECT p.name, p.description, p.repo_owner, p.repo_name, p.homepage, p.license, p.stars, p.downloads_total, p.updated_at, p.created_at, u.login AS owner_login, " +
+        Sql info = Sql("SELECT p.name, p.description, p.repo_owner, p.repo_name, p.repo_path, p.homepage, p.license, p.stars, p.downloads_total, p.updated_at, p.created_at, u.login AS owner_login, " +
                        String("lv.version AS latest_version, (SELECT GROUP_CONCAT(t.tag ORDER BY t.tag SEPARATOR ',') FROM package_tags t WHERE t.package_id = p.id) AS tags ") +
                        "FROM packages p JOIN users u ON u.id = p.owner_id LEFT JOIN package_versions lv ON lv.id = p.latest_version_id WHERE p.name = ");
         info.ps(name);

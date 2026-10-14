@@ -379,6 +379,34 @@ public f<bool> isValidGithubName(const String& name) {
 }
 
 /**
+ * Directory of a package inside its repository, e.g. "packages/github". Leading "./", surrounding slashes and empty segments
+ * are dropped; every segment must be a GitHub-like name ('.' and '..' are not allowed). The empty path is the repository root.
+ */
+public f<bool> normalizeRepoPath(const String& input, String& path) {
+    const Vector<String> parts = split(input.trim(), '/');
+    Vector<String> kept;
+    for unsigned long i = 0l; i < parts.getSize(); i++ {
+        const String& part = parts.get(i);
+        if part.isEmpty() || (part == "." && kept.getSize() == 0l) { continue; }
+        if part == "." || part == ".." || !isValidGithubName(part) { return false; }
+        kept.pushBack(part);
+    }
+    const String joined = joinPath(kept, "/");
+    if joined.getLength() > 255l { return false; }
+    path = joined;
+    return true;
+}
+
+/**
+ * "packages/github" -> "github"
+ */
+public f<String> lastPathSegment(const String& path) {
+    const long slash = path.rfind('/');
+    if slash < 0l { return path; }
+    return tail(path, cast<unsigned long>(slash) + 1l);
+}
+
+/**
  * Tags are lowercase, 1-24 characters of letters, digits and '-'. Anything else is normalized away.
  * Returns the empty string if nothing is left.
  */
@@ -498,5 +526,13 @@ f<bool> testValidation() {
     const Vector<String> tags = parseTags(String("Web, cli, web;;Net_Utils"));
     assert tags.getSize() == 3l;
     assert tags.get(2l) == "net-utils";
+    String path;
+    assert normalizeRepoPath(String(" ./packages//github/ "), path) && path == "packages/github";
+    assert normalizeRepoPath(String("/"), path) && path.isEmpty();
+    assert !normalizeRepoPath(String("packages/../secret"), path);
+    assert !normalizeRepoPath(String("a/./b"), path);
+    assert !normalizeRepoPath(String("my dir"), path);
+    assert lastPathSegment(String("packages/github")) == "github";
+    assert lastPathSegment(String("github")) == "github";
     return true;
 }

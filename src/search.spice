@@ -102,7 +102,7 @@ p SearchParams.appendFilters(Sql& sql) {
  * Query for the page of results with the columns that `packageCard` and the API need
  */
 public f<Sql> SearchParams.listQuery() {
-    Sql sql = Sql("SELECT p.id, p.name, p.description, p.stars, p.downloads_total, p.updated_at, p.homepage, p.license, p.repo_owner, p.repo_name, " +
+    Sql sql = Sql("SELECT p.id, p.name, p.description, p.stars, p.downloads_total, p.updated_at, p.homepage, p.license, p.repo_owner, p.repo_name, p.repo_path, " +
                   String("u.login AS owner_login, lv.version AS latest_version, lv.published_at AS latest_published_at, ") +
                   "(SELECT GROUP_CONCAT(t.tag ORDER BY t.tag SEPARATOR ',') FROM package_tags t WHERE t.package_id = p.id) AS tags, ");
     if this.q.isEmpty() {

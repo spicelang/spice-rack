@@ -65,9 +65,10 @@ public f<String> handleDashboard(Ctx& ctx) {
 f<String> area(bool adminMode) { return adminMode ? String("/admin/packages") : String("/dashboard/packages"); }
 
 /**
- * Split "owner/repo" (also accepts a github.com URL) into its parts. Returns false if it is not valid.
+ * Split "owner/repo" (also accepts a github.com URL) into its parts. Returns false if it is not valid. A link to a
+ * directory ("https://github.com/owner/repo/tree/main/packages/x") also sets `path`, otherwise it is empty.
  */
-public f<bool> parseRepoRef(const String& input, String& owner, String& repo) {
+public f<bool> parseRepoRef(const String& input, String& owner, String& repo, String& path) {
     String text = input.trim();
     if text.startsWith("https://github.com/") { text = tail(text, 19l); }
     else if text.startsWith("http://github.com/") { text = tail(text, 18l); }
@@ -75,11 +76,38 @@ public f<bool> parseRepoRef(const String& input, String& owner, String& repo) {
     while text.endsWith("/") { text = head(text, text.getLength() - 1l); }
     if text.endsWith(".git") { text = head(text, text.getLength() - 4l); }
     const Vector<String> parts = split(text, '/');
-    if parts.getSize() != 2l { return false; }
+    if parts.getSize() < 2l { return false; }
+    String dir;
+    if parts.getSize() > 2l {
+        // owner/repo/tree/<branch>/<path>
+        if parts.getSize() < 5l || parts.get(2l) != "tree" { return false; }
+        Vector<String> rest;
+        for unsigned long i = 4l; i < parts.getSize(); i++ { rest.pushBack(parts.get(i)); }
+        if !normalizeRepoPath(joinPath(rest, "/"), dir) { return false; }
+    }
     if !isValidGithubName(parts.get(0l)) || !isValidGithubName(parts.get(1l)) { return false; }
     owner = parts.get(0l);
     repo = parts.get(1l);
+    path = dir;
     return true;
+}
+
+/**
+ * The directory of a package from the form: the "path" field, or the directory of a pasted link if that is empty.
+ * Returns false if the field is not a valid path.
+ */
+f<bool> formRepoPath(const Ctx& ctx, const String& fromLink, String& path) {
+    const String field = ctx.form.get("path");
+    const String fieldTrimmed = trimmed(field);
+    if fieldTrimmed.isEmpty() {
+        path = fromLink;
+        return true;
+    }
+    return normalizeRepoPath(field, path);
+}
+
+f<String> repoPathRule() {
+    return String("The directory must be a path inside the repository like packages/my-package (letters, digits, '-', '_' and '.').");
 }
 
 f<String> suggestName(const String& repo) {
@@ -116,6 +144,7 @@ f<String> renderCreateForm(const Ctx& ctx, bool adminMode, JV repos, JV taken, c
     JsonWriter form;
     form.beginObject();
     form.kStr("repo", ctx.form.get("repo"));
+    form.kStr("path", ctx.form.get("path"));
     form.kStr("maintainer", ctx.form.get("maintainer"));
     form.kStr("name", ctx.form.get("name"));
     form.kStr("description", ctx.form.get("description"));
@@ -126,7 +155,7 @@ f<String> renderCreateForm(const Ctx& ctx, bool adminMode, JV repos, JV taken, c
     View view;
     view.flag("admin_mode", adminMode);
     view.text("area", area(adminMode));
-    view.text("name_hint", packageNameRule() + " Leave empty to use the repository name.");
+    view.text("name_hint", packageNameRule() + " Leave empty to use the name of the directory or repository.");
     view.text("cancel_url", adminMode ? String("/admin/packages") : String("/dashboard"));
     view.list("errors", errors);
     view.json("repos", options.finish());
@@ -153,7 +182,8 @@ public f<String> handleCreatePackage(Ctx& ctx, bool adminMode) {
             }
             Batch batch;
             batch.http("GET", String(GITHUB_API) + "/users/" + urlEncode(ctx.user.login) + "/repos?per_page=100&sort=pushed&type=owner", String("application/vnd.github+json"), ctx.user.token);
-            Sql taken = Sql("SELECT repo_owner, repo_name FROM packages WHERE repo_owner = ");
+            // Repositories with packages in subdirectories stay selectable, they may hold more
+            Sql taken = Sql("SELECT repo_owner, repo_name FROM packages WHERE repo_path = '' AND repo_owner = ");
             taken.ps(ctx.user.login);
             batch.query(taken);
             return batch.finish();
@@ -168,13 +198,17 @@ public f<String> handleCreatePackage(Ctx& ctx, bool adminMode) {
     if !ctx.csrfOk() { return forbidden(ctx); }
     String owner;
     String repo;
+    String linkPath;
+    String path;
     String repoInput = ctx.form.get("repo");
     const String repoTrimmed = trimmed(repoInput);
     if repoTrimmed.isEmpty() { repoInput = ctx.form.get("repo_select"); }
     String name = lower(ctx.formTrim("name"));
-    const bool repoValid = parseRepoRef(repoInput, owner, repo);
+    const bool repoValid = parseRepoRef(repoInput, owner, repo, linkPath);
     if !repoValid { errors.pushBack(String("Please choose a repository or enter it as owner/name.")); }
-    if name.isEmpty() && repoValid { name = suggestName(repo); }
+    const bool pathValid = formRepoPath(ctx, linkPath, path);
+    if !pathValid { errors.pushBack(repoPathRule()); }
+    if name.isEmpty() && repoValid && pathValid { name = suggestName(path.isEmpty() ? repo : lastPathSegment(path)); }
     if repoValid && !isValidPackageName(name) { errors.pushBack(packageNameRule()); }
     const String homepage = ctx.formTrim("homepage");
     if !homepage.isEmpty() && (!isHttpUrl(homepage) || homepage.getLength() > 255l) { errors.pushBack(String("The homepage must be an http(s) URL.")); }
@@ -197,11 +231,18 @@ public f<String> handleCreatePackage(Ctx& ctx, bool adminMode) {
         dup.ps(owner);
         dup.sql(" AND repo_name = ");
         dup.ps(repo);
+        dup.sql(" AND repo_path = ");
+        dup.ps(path);
         dup.sql(")");
         batch.query(dup);
         Sql target = Sql("SELECT id FROM users WHERE login = ");
         target.ps(adminMode ? maintainer : ctx.user.login);
         batch.query(target);
+        // A package in a subdirectory needs a manifest there, otherwise the directory is most likely mistyped
+        if !path.isEmpty() {
+            batch.http("GET", repoApiUrl(owner, repo) + "/contents/" + path + "/" + MANIFEST_FILE, String("application/vnd.github+json"),
+                       adminMode ? ctx.config.githubApiToken : ctx.user.token);
+        }
         return batch.finish();
     }
 
@@ -214,7 +255,13 @@ public f<String> handleCreatePackage(Ctx& ctx, bool adminMode) {
     if repoResponse.getNum("status") == 404l { errors.pushBack(String("GitHub does not know this repository, or it is private.")); }
     else if repoResponse.getNum("status") != 200l { errors.pushBack(String("GitHub could not be reached. Please try again in a moment.")); }
     else if !adminMode && !permissions.getBool("push") && !permissions.getBool("admin") { errors.pushBack(String("You need push access to this repository to publish it.")); }
-    if duplicates.size() > 0l { errors.pushBack(String("A package with this name, or for this repository, already exists.")); }
+    else if !path.isEmpty() {
+        JV manifestResponse = ctx.res(0, 3l);
+        const long manifestStatus = manifestResponse.getNum("status");
+        if manifestStatus == 404l { errors.pushBack(String("The directory ") + path + " of this repository has no " + MANIFEST_FILE + "."); }
+        else if manifestStatus != 200l { errors.pushBack(String("GitHub could not be reached. Please try again in a moment.")); }
+    }
+    if duplicates.size() > 0l { errors.pushBack(String("A package with this name, or for this directory of the repository, already exists.")); }
     if !targetUser.exists() { errors.pushBack(String("The maintainer has not signed in to the registry yet.")); }
     if errors.getSize() > 0l {
         JV none = missingJson();
@@ -234,10 +281,12 @@ public f<String> handleCreatePackage(Ctx& ctx, bool adminMode) {
         JV license = repoInfo.get("license");
         String spdx = license.getStr("spdx_id");
         if spdx == "NOASSERTION" { spdx = String(""); }
-        String finalDescription = description.isEmpty() ? head(repoInfo.getStr("description"), 500l) : description;
-        String finalHomepage = homepage.isEmpty() ? repoInfo.getStr("homepage") : homepage;
+        // Description and homepage of a repository with several packages are not the package's, the sync reads its manifest
+        const bool atRoot = path.isEmpty();
+        String finalDescription = description.isEmpty() && atRoot ? head(repoInfo.getStr("description"), 500l) : description;
+        String finalHomepage = homepage.isEmpty() && atRoot ? repoInfo.getStr("homepage") : homepage;
         if !isHttpUrl(finalHomepage) || finalHomepage.getLength() > 255l { finalHomepage = String(""); }
-        Sql insert = Sql("INSERT INTO packages (name, description, repo_owner, repo_name, homepage, license, stars, owner_id, created_at, updated_at) VALUES (");
+        Sql insert = Sql("INSERT INTO packages (name, description, repo_owner, repo_name, repo_path, homepage, license, stars, owner_id, created_at, updated_at) VALUES (");
         insert.ps(name);
         insert.sql(", ");
         insert.ps(finalDescription);
@@ -245,6 +294,8 @@ public f<String> handleCreatePackage(Ctx& ctx, bool adminMode) {
         insert.ps(realOwner);
         insert.sql(", ");
         insert.ps(realRepo);
+        insert.sql(", ");
+        insert.ps(path);
         insert.sql(", ");
         insert.ps(finalHomepage);
         insert.sql(", ");
@@ -271,7 +322,7 @@ public f<String> handleCreatePackage(Ctx& ctx, bool adminMode) {
     }
 
     if ctx.failed(1, 0l) {
-        errors.pushBack(String("A package with this name, or for this repository, already exists."));
+        errors.pushBack(String("A package with this name, or for this directory of the repository, already exists."));
         JV none = missingJson();
         return ctx.html(409, renderCreateForm(ctx, adminMode, none, none, errors));
     }
@@ -281,6 +332,7 @@ public f<String> handleCreatePackage(Ctx& ctx, bool adminMode) {
     job.packageId = idRow.getNum("id");
     job.owner = realOwner;
     job.repo = realRepo;
+    job.path = path;
     Vector<SyncJob> jobs;
     jobs.pushBack(job);
     if step == 2 { return syncFetchBatch(ctx, jobs); }
@@ -301,6 +353,7 @@ f<String> renderManageForm(const Ctx& ctx, bool adminMode, JV pkg, const Vector<
     form.beginObject();
     form.kStr("name", posted ? ctx.form.get("name") : name);
     form.kStr("repo", posted ? ctx.form.get("repo") : pkg.getStr("repo_owner") + "/" + pkg.getStr("repo_name"));
+    form.kStr("path", posted ? ctx.form.get("path") : pkg.getStr("repo_path"));
     form.kStr("maintainer", posted ? ctx.form.get("maintainer") : pkg.getStr("owner_login"));
     form.kStr("description", posted ? ctx.form.get("description") : pkg.getStr("description"));
     form.kStr("tags", posted ? ctx.form.get("tags") : pkg.getStr("tags"));
@@ -326,7 +379,7 @@ public f<String> handleManagePackage(Ctx& ctx, const String& name, bool adminMod
 
     if step == 0 {
         Batch batch;
-        Sql sql = Sql("SELECT p.id, p.name, p.description, p.repo_owner, p.repo_name, p.homepage, p.owner_id, p.synced_at, u.login AS owner_login, " +
+        Sql sql = Sql("SELECT p.id, p.name, p.description, p.repo_owner, p.repo_name, p.repo_path, p.homepage, p.owner_id, p.synced_at, u.login AS owner_login, " +
                       String("(SELECT GROUP_CONCAT(t.tag ORDER BY t.tag SEPARATOR ', ') FROM package_tags t WHERE t.package_id = p.id) AS tags ") +
                       "FROM packages p JOIN users u ON u.id = p.owner_id WHERE p.name = ");
         sql.ps(name);
@@ -349,6 +402,7 @@ public f<String> handleManagePackage(Ctx& ctx, const String& name, bool adminMod
         job.packageId = packageId;
         job.owner = pkg.getStr("repo_owner");
         job.repo = pkg.getStr("repo_name");
+        job.path = pkg.getStr("repo_path");
         Vector<SyncJob> jobs;
         jobs.pushBack(job);
         if step == 1 { return syncFetchBatch(ctx, jobs); }
@@ -379,12 +433,15 @@ public f<String> handleManagePackage(Ctx& ctx, const String& name, bool adminMod
         String newName = name;
         String newOwner;
         String newRepo;
+        String linkPath;
+        String newPath;
         String maintainer = ctx.formTrim("maintainer");
         if !homepage.isEmpty() && (!isHttpUrl(homepage) || homepage.getLength() > 255l) { errors.pushBack(String("The homepage must be an http(s) URL.")); }
         if adminMode {
             newName = lower(ctx.formTrim("name"));
             if !isValidPackageName(newName) { errors.pushBack(String("Invalid package name.")); }
-            if !parseRepoRef(ctx.form.get("repo"), newOwner, newRepo) { errors.pushBack(String("Please enter the repository as owner/name.")); }
+            if !parseRepoRef(ctx.form.get("repo"), newOwner, newRepo, linkPath) { errors.pushBack(String("Please enter the repository as owner/name.")); }
+            if !formRepoPath(ctx, linkPath, newPath) { errors.pushBack(repoPathRule()); }
             if maintainer.isEmpty() { errors.pushBack(String("Please enter the maintainer's GitHub login.")); }
         }
         if errors.getSize() > 0l { return ctx.html(400, renderManageForm(ctx, adminMode, pkg, errors)); }
@@ -404,6 +461,8 @@ public f<String> handleManagePackage(Ctx& ctx, const String& name, bool adminMod
                 update.ps(newOwner);
                 update.sql(", repo_name = ");
                 update.ps(newRepo);
+                update.sql(", repo_path = ");
+                update.ps(newPath);
                 update.sql(", owner_id = (SELECT id FROM users WHERE login = ");
                 update.ps(maintainer);
                 update.sql(")");
@@ -426,7 +485,7 @@ public f<String> handleManagePackage(Ctx& ctx, const String& name, bool adminMod
         }
         if ctx.failed(1, 0l) {
             const String code = ctx.errorCode(1, 0l);
-            errors.pushBack(code == "ER_DUP_ENTRY" ? String("That name or repository is already used by another package.") :
+            errors.pushBack(code == "ER_DUP_ENTRY" ? String("That name or directory of the repository is already used by another package.") :
                             (code == "ER_BAD_NULL_ERROR" ? String("The maintainer has not signed in to the registry yet.") : String("The package could not be saved.")));
             return ctx.html(409, renderManageForm(ctx, adminMode, pkg, errors));
         }
@@ -448,11 +507,16 @@ f<bool> testSuggestName() {
 f<bool> testParseRepoRef() {
     String owner;
     String repo;
-    assert parseRepoRef(String("spicelang/spice"), owner, repo) && owner == "spicelang" && repo == "spice";
-    assert parseRepoRef(String(" https://github.com/foo/bar.git/ "), owner, repo) && owner == "foo" && repo == "bar";
-    assert !parseRepoRef(String("foo"), owner, repo);
-    assert !parseRepoRef(String("foo/bar/baz"), owner, repo);
-    assert !parseRepoRef(String("foo/ba r"), owner, repo);
+    String path;
+    assert parseRepoRef(String("spicelang/spice"), owner, repo, path) && owner == "spicelang" && repo == "spice" && path.isEmpty();
+    assert parseRepoRef(String(" https://github.com/foo/bar.git/ "), owner, repo, path) && owner == "foo" && repo == "bar";
+    assert !parseRepoRef(String("foo"), owner, repo, path);
+    assert !parseRepoRef(String("foo/bar/baz"), owner, repo, path);
+    assert !parseRepoRef(String("foo/ba r"), owner, repo, path);
+    assert parseRepoRef(String("https://github.com/spicelang/packages/tree/main/packages/github/"), owner, repo, path);
+    assert owner == "spicelang" && repo == "packages" && path == "packages/github";
+    assert !parseRepoRef(String("foo/bar/tree/main"), owner, repo, path);
+    assert !parseRepoRef(String("foo/bar/blob/main/x"), owner, repo, path);
     assert suggestName(String("My_Repo!")) == "my-repo";
     return true;
 }
