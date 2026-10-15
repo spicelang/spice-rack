@@ -420,7 +420,7 @@ describe('Spice Rack', { skip }, () => {
     has(page.text, /href="\/packages\?tag=parser"/);
     has(page.text, /MIT/);
     has(page.text, /Package created/);
-    has(page.text, /json-parser = "\^1\.2\.0"/);
+    has(page.text, /<code>spice-shaker install json-parser<\/code>/);
 
     const versions = await anon.get('/packages/json-parser?tab=versions');
     has(versions.text, /<h3>v1\.2\.0<\/h3>/);
