@@ -2,8 +2,8 @@
     {% if pkg.latest_version %}
     <section class="side-block">
         <h2>Use this package</h2>
-        <p class="muted small">Run <code>spice-shaker install {{ pkg.name }}</code> or add it to the <code>[dependencies]</code> of your <code>spice.toml</code>:</p>
-        <pre class="code"><code>{{ pkg.name }} = "^{{ caret_version }}"</code></pre>
+        <p class="muted small code-label">Use {{ pkg.name }} in your project:</p>
+        <pre class="code"><code>spice-shaker install {{ pkg.name }}</code></pre>
         <p><a class="btn btn-block" href="/api/v1/packages/{{ pkg.name|url }}/versions/{{ pkg.latest_version|url }}/download">{% include "icons/download" %}Download v{{ pkg.latest_version }}</a></p>
     </section>
     {% endif %}

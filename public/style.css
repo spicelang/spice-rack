@@ -270,11 +270,14 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .facts dt { color: var(--muted); }
 .facts dd { margin: 0; text-align: right; word-break: break-word; }
 .code { margin: 0 0 12px; font-size: .85rem; }
+.code-label { margin-bottom: 6px; }
 .readme { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px 28px; overflow-x: auto; }
 
 /* Rendered markdown (README, changelog) */
 .markdown-body { overflow-wrap: anywhere; }
 .markdown-body > :first-child { margin-top: 0; }
+/* GitHub wraps headings in div.markdown-heading, so the reset above does not reach a leading heading */
+.markdown-body > .markdown-heading:first-child > :first-child { margin-top: 0; }
 .markdown-body > :last-child { margin-bottom: 0; }
 .markdown-body h1, .markdown-body h2 { padding-bottom: .3em; border-bottom: 1px solid var(--border); margin-top: 1.6em; }
 .markdown-body h3, .markdown-body h4 { margin-top: 1.4em; }
