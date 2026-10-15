@@ -246,9 +246,6 @@ public f<String> handlePackagePage(Ctx& ctx, const String& name) {
         view.text("tab_page", String("package/stats"));
     }
 
-    // The sidebar suggests a caret constraint for the latest version
-    const Semver parsed = parseSemver(latest);
-    view.text("caret_version", parsed.valid ? fmtLong(parsed.major) + "." + fmtLong(parsed.minor) + "." + fmtLong(parsed.patch) : latest);
     view.flag("homepage_ok", isHttpUrl(pkg.getStr("homepage")));
     view.flag("can_manage", ctx.user.present && (ctx.isAdmin() || ctx.user.id == pkg.getNum("owner_id")));
 
