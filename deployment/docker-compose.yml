@@ -5,10 +5,15 @@
 # Copy this directory to the server, then:
 #   cp .env.example .env          # fill in the secrets and host names (DNS must point to the server)
 #   docker compose up -d
-# Update: docker compose pull && docker compose up -d
+# Updates: the watchtower service checks Docker Hub for new app images (WATCHTOWER_POLL_INTERVAL) and restarts the apps
+# with them. Manually: docker compose pull && docker compose up -d
 x-app: &app
   restart: unless-stopped
   pull_policy: always
+  labels:
+    # Only containers with this label are updated by watchtower (not MySQL, not other containers on the server)
+    com.centurylinklabs.watchtower.enable: "true"
+    com.centurylinklabs.watchtower.scope: spice-rack
   depends_on:
     db:
       condition: service_healthy
@@ -71,6 +76,23 @@ services:
       DB_NAME: rack_staging
       GITHUB_CLIENT_ID: ${STAGING_GITHUB_CLIENT_ID:-}
       GITHUB_CLIENT_SECRET: ${STAGING_GITHUB_CLIENT_SECRET:-}
+
+  # Restarts app-prod and app-staging when :latest or :staging changes on Docker Hub. The original containrrr/watchtower
+  # is archived and too old for current Docker engines, this is its maintained fork.
+  watchtower:
+    image: nickfedor/watchtower:1.23.1
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    labels:
+      com.centurylinklabs.watchtower.scope: spice-rack
+    environment:
+      WATCHTOWER_LABEL_ENABLE: "true"
+      # Ignores containers of other watchtower instances on the server
+      WATCHTOWER_SCOPE: spice-rack
+      WATCHTOWER_POLL_INTERVAL: ${WATCHTOWER_POLL_INTERVAL:-300}
+      # Remove the old image after an update
+      WATCHTOWER_CLEANUP: "true"
 
 networks:
   # Created by the nginx-proxy setup; rename here if yours is called differently
