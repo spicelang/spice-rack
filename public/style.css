@@ -171,6 +171,7 @@ main:has(> .hero) > .hero { flex: 1 0 auto; display: flex; flex-direction: colum
 .hero-search input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .hero-stats { list-style: none; display: flex; justify-content: center; gap: 28px; padding: 0; margin: 0 0 20px; color: var(--muted); flex-wrap: wrap; }
 .hero-stats strong { color: var(--text); font-size: 1.1rem; }
+.hero-stats a { color: inherit; }
 .hero-tags { justify-content: center; }
 
 /* Tags and badges */

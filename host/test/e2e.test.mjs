@@ -246,6 +246,7 @@ describe('Spice Rack', { skip }, () => {
     has(home.text, /id="theme-toggle"/);
     has(home.text, /<script src="\/static\/dismiss.js" defer><\/script>/);
     has(home.text, /<section class="cta">/);
+    has(home.text, /<a href="\/packages"><strong>0<\/strong> packages<\/a>/);
     const created = await anon.get('/?notice=created');
     assert.equal(created.status, 200);
     has(created.text, /class="notice notice-ok"[^]*data-dismiss="notice"/);

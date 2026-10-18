@@ -6,7 +6,7 @@
         <input id="hero-q" type="search" name="q" placeholder="Search packages, e.g. json, http, cli" autocomplete="off"><button class="btn btn-primary" type="submit">Search</button>
     </form>
     <ul class="hero-stats">
-        <li><strong>{{ stats.packages|thousands }}</strong> packages</li>
+        <li><a href="/packages"><strong>{{ stats.packages|thousands }}</strong> packages</a></li>
         <li><strong>{{ stats.downloads|thousands }}</strong> downloads</li>
         <li><strong>{{ stats.maintainers|thousands }}</strong> maintainers</li>
     </ul>
