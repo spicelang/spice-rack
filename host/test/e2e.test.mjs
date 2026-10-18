@@ -64,7 +64,10 @@ const FIXTURES = {
   'GET https://api.github.com/repos/testadmin/http-client': () => json(repoInfo('http-client')),
   'GET https://api.github.com/repos/testadmin/nopush': () => json(repoInfo('nopush', { permissions: { push: false } })),
   'GET https://api.github.com/repos/testadmin/json-parser/readme': () =>
-    html('<h1>json-parser</h1><p>A <b>fast</b> parser. <a href="docs/usage.md">usage</a></p><img src="img/logo.png">'),
+    html(
+      '<h1>json-parser</h1><p>A <b>fast</b> parser. <a href="docs/usage.md">usage</a></p><img src="img/logo.png">' +
+        '<pre lang="spice" class="notranslate"><code class="notranslate">f&lt;int&gt; main() {}\n</code></pre>',
+    ),
   'GET https://api.github.com/repos/testadmin/http-client/readme': () => html('<h1>http-client</h1>'),
   'GET https://api.github.com/repos/testadmin/big': () => json(repoInfo('big')),
   'GET https://api.github.com/repos/testadmin/big/readme': () => html('<p>line <a href="x.md">y</a> &amp; <img src="a.png"></p>\n'.repeat(20000)),
@@ -423,6 +426,8 @@ describe('Spice Rack', { skip }, () => {
     has(page.text, /A <b>fast<\/b> parser/);
     has(page.text, /href="https:\/\/github.com\/testadmin\/json-parser\/blob\/HEAD\/docs\/usage.md"/);
     has(page.text, /src="https:\/\/raw.githubusercontent.com\/testadmin\/json-parser\/HEAD\/img\/logo.png"/);
+    // GitHub does not highlight Spice code, the sync does
+    has(page.text, /<span class="pl-k">f<\/span>&lt;<span class="pl-k">int<\/span>&gt; <span class="pl-en">main<\/span>\(\) \{\}/);
     has(page.text, /href="\/packages\?tag=parser"/);
     has(page.text, /MIT/);
     has(page.text, /Package created/);

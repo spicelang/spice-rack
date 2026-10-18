@@ -137,6 +137,18 @@ public f<String> head(const String& input, unsigned long count) {
     return input.getSubstring(0l, cast<long>(count));
 }
 
+/**
+ * Whether `text` contains `needle` at offset `at` (no temporary strings, HTML documents can be large)
+ */
+public f<bool> matchesAt(const String& text, unsigned long at, string needle) {
+    const unsigned long needleLen = getRawLength(needle);
+    if at + needleLen > text.getLength() { return false; }
+    for unsigned long i = 0l; i < needleLen; i++ {
+        if text[at + i] != needle[i] { return false; }
+    }
+    return true;
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Escaping
 // ---------------------------------------------------------------------------------------------------------------------

@@ -5,6 +5,7 @@ import "./semver";
 import "./core";
 import "./template";
 import "./layout";
+import "./highlight";
 import "./github";
 import "./search";
 import "./pages_package";
