@@ -89,6 +89,19 @@ public f<String> repoApiUrl(const String& owner, const String& repo) {
 }
 
 /**
+ * Error message for a GitHub API response that is not the expected one
+ */
+public f<String> githubErrorMessage(JV response) {
+    const long status = response.getNum("status");
+    if status == 0l { return String("GitHub could not be reached. Please try again in a moment."); }
+    if status == 401l { return String("GitHub did not accept the access token (status 401)."); }
+    if status == 403l || status == 429l {
+        return String("GitHub refused the request (status ") + fmtLong(status) + "), most likely because of its rate limit. Please try again later.";
+    }
+    return String("GitHub answered with status ") + fmtLong(status) + ". Please try again in a moment.";
+}
+
+/**
  * "packages/github" -> "packages/github/", "" -> ""
  */
 f<String> dirPrefix(const String& path) {

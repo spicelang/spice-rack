@@ -2,6 +2,17 @@ const ALLOWED_HTTP_HOSTS = new Set(['api.github.com', 'github.com', 'raw.githubu
 const HTTP_TIMEOUT_MS = 15_000;
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 
+/** The message of a GitHub error response, or the start of any other body */
+function errorMessage(body) {
+  try {
+    const message = JSON.parse(body)?.message;
+    if (typeof message === 'string') return message.slice(0, 200);
+  } catch {
+    // not JSON
+  }
+  return body.slice(0, 200).replace(/\s+/g, ' ');
+}
+
 /**
  * Executes the effects the wasm module asks for: SQL statements and outgoing HTTP requests.
  */
@@ -34,7 +45,12 @@ export function createEffects(pool, log, fetchImpl = fetch) {
       });
       const buffer = Buffer.from(await response.arrayBuffer());
       if (buffer.length > MAX_RESPONSE_BYTES) return { status: 0, error: 'response too large' };
-      return { status: response.status, body: buffer.toString('utf8') };
+      const body = buffer.toString('utf8');
+      // A missing readme or manifest is routine, every other error status is worth a line
+      if (response.status >= 400 && response.status !== 404) {
+        log.warn(`http ${effect.method} ${url.hostname}${url.pathname} returned ${response.status}: ${errorMessage(body)}`);
+      }
+      return { status: response.status, body };
     } catch (error) {
       log.warn(`http ${effect.method} ${url.hostname}${url.pathname} failed: ${error.message}`);
       return { status: 0, error: error.message };

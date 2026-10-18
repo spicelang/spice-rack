@@ -131,9 +131,14 @@ const excerpt = (text, re) => {
 };
 const has = (text, re) => assert.ok(re.test(String(text)), excerpt(text, re));
 const lacks = (text, re) => assert.ok(!re.test(String(text)), excerpt(text, re));
+// GitHub answers 401 to these tokens, as for a revoked or expired one
+const REVOKED_TOKENS = new Set();
 async function mockFetch(url, opts = {}) {
   const key = `${opts.method || 'GET'} ${url}`;
   requestsSeen.push(key);
+  if (REVOKED_TOKENS.has(opts.headers?.Authorization?.replace('Bearer ', ''))) {
+    return new Response(JSON.stringify({ message: 'Bad credentials' }), { status: 401 });
+  }
   const handler = FIXTURES[key];
   if (!handler) return new Response('not found', { status: 404 });
   return handler(opts);
@@ -683,6 +688,38 @@ describe('Spice Rack', { skip }, () => {
     has(summary, /synced 1 packages/);
     assert.ok(requestsSeen.length > before);
     assert.equal(await app.runSyncTask(), 'nothing to sync');
+  });
+
+  it('signs in again when GitHub rejects the token of the session', async () => {
+    const sessionId = admin.jar.get('rack_session');
+    REVOKED_TOKENS.add('tok-admin');
+    try {
+      const form = await admin.get('/dashboard/packages/new');
+      assert.equal(form.location, '/auth/github');
+      assert.equal(admin.jar.get('rack_session'), undefined);
+      assert.equal(admin.jar.get('rack_return'), '/dashboard/packages/new');
+      const [sessions] = await conn.query('SELECT id FROM sessions WHERE id = ?', [sessionId]);
+      assert.equal(sessions.length, 0);
+    } finally {
+      REVOKED_TOKENS.delete('tok-admin');
+    }
+    const renewed = await login(admin, 'admin');
+    assert.equal(renewed.location, '/dashboard/packages/new');
+    const csrf = admin.csrf((await admin.get('/dashboard/packages/new')).text);
+
+    REVOKED_TOKENS.add('tok-admin');
+    try {
+      // Rejected again right after signing in: an error instead of a redirect loop
+      const again = await admin.post('/dashboard/packages/new', { csrf, repo: 'testadmin/json-parser', name: 'renewed' });
+      assert.equal(again.status, 409);
+      has(again.text, /did not accept the access token \(status 401\)/);
+      admin.jar.delete('rack_renew');
+      const post = await admin.post('/dashboard/packages/new', { csrf, repo: 'testadmin/json-parser', name: 'renewed' });
+      assert.equal(post.location, '/auth/github');
+    } finally {
+      REVOKED_TOKENS.delete('tok-admin');
+    }
+    await login(admin, 'admin');
   });
 
   it('signs out', async () => {
