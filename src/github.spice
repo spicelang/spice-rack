@@ -5,6 +5,7 @@ import "./util";
 import "./json";
 import "./semver";
 import "./core";
+import "./highlight";
 
 // ---------------------------------------------------------------------------------------------------------------------
 // GitHub integration: OAuth helpers and the synchronisation of package metadata, README, releases and dependencies.
@@ -134,18 +135,6 @@ public f<String> tagVersionPart(const String& tag, const String& path) {
 }
 
 /**
- * Whether `text` contains `needle` at offset `at` (no temporary strings, README files can be large)
- */
-f<bool> matchesAt(const String& text, unsigned long at, string needle) {
-    const unsigned long needleLen = getRawLength(needle);
-    if at + needleLen > text.getLength() { return false; }
-    for unsigned long i = 0l; i < needleLen; i++ {
-        if text[at + i] != needle[i] { return false; }
-    }
-    return true;
-}
-
-/**
  * GitHub renders relative links of a README relative to the repository. On the registry they have to point back
  * to GitHub: images to the raw files, everything else to the file view. Relative links of a README in a subdirectory
  * (`path`) start there, links with a leading '/' at the repository root.
@@ -205,7 +194,7 @@ public f<Vector<Release>> parseReleases(JV releases, const String& owner, const 
         release.version = parsed.toString();
         release.title = item.getStr("name");
         release.body = item.getStr("body");
-        release.bodyHtml = item.getStr("body_html");
+        release.bodyHtml = highlightSpiceBlocks(item.getStr("body_html"));
         release.prerelease = item.getBool("prerelease") || !parsed.pre.isEmpty();
         release.publishedAt = toDbTime(item.getStr("published_at"), toDbTime(item.getStr("created_at"), String("1970-01-01 00:00:00")));
         release.tarballUrl = String("https://github.com/") + owner + "/" + repo + "/archive/refs/tags/" + urlEncode(release.tag) + ".tar.gz";
@@ -400,7 +389,7 @@ public f<String> syncWriteBatch(const Ctx& ctx, const Vector<SyncJob>& jobs, int
             const String readmeBody = readme.getStr("body");
             if readme.getNum("status") == 200l && readmeBody.getLength() <= MAX_README_BYTES {
                 sql.sql(", readme_html = ?");
-                sql.s(rewriteRelativeLinks(readmeBody, job.owner, job.repo, job.path));
+                sql.s(highlightSpiceBlocks(rewriteRelativeLinks(readmeBody, job.owner, job.repo, job.path)));
             } else if readme.getNum("status") == 404l {
                 sql.sql(", readme_html = NULL");
             }

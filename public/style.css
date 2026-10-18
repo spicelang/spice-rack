@@ -20,6 +20,13 @@
   --warn-soft: #f9eed3;
   --danger: #b3261e;
   --code-bg: #ecece8;
+  --hl-comment: #6a6a65;
+  --hl-keyword: #b3192c;
+  --hl-string: #0a3069;
+  --hl-constant: #0550ae;
+  --hl-entity: #6639ba;
+  --hl-variable: #953800;
+  --hl-tag: #116329;
   --chart: #c01a2e;
   --chart-grid: #e4e4df;
   --glass: rgba(245, 245, 243, .8);
@@ -49,6 +56,13 @@
   --warn-soft: #373018;
   --danger: #ff8a80;
   --code-bg: #2d2d31;
+  --hl-comment: #9b9ba2;
+  --hl-keyword: #ff7b85;
+  --hl-string: #a5d6ff;
+  --hl-constant: #79c0ff;
+  --hl-entity: #d2a8ff;
+  --hl-variable: #ffa657;
+  --hl-tag: #7ee787;
   --chart: #ff5468;
   --chart-grid: #35353a;
   --glass: rgba(29, 29, 32, .8);
@@ -76,6 +90,13 @@
   --warn-soft: #373018;
   --danger: #ff8a80;
   --code-bg: #2d2d31;
+  --hl-comment: #9b9ba2;
+  --hl-keyword: #ff7b85;
+  --hl-string: #a5d6ff;
+  --hl-constant: #79c0ff;
+  --hl-entity: #d2a8ff;
+  --hl-variable: #ffa657;
+  --hl-tag: #7ee787;
   --chart: #ff5468;
   --chart-grid: #35353a;
   --glass: rgba(29, 29, 32, .8);
@@ -293,6 +314,22 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .markdown-body hr { border: 0; border-top: 1px solid var(--border); margin: 1.5em 0; }
 .markdown-body ul.contains-task-list { list-style: none; padding-left: 1.2em; }
 .markdown-body .highlight pre { margin-bottom: 1em; }
+/* Syntax highlighting: GitHub marks the tokens of the code blocks it highlights with its pl-* classes, Spice blocks get the
+   same classes when a package is synced (src/highlight.spice) */
+.pl-c { color: var(--hl-comment); }
+.pl-k { color: var(--hl-keyword); }
+.pl-s, .pl-pds, .pl-sr, .pl-corl { color: var(--hl-string); }
+.pl-c1, .pl-s .pl-v, .pl-mh, .pl-ms { color: var(--hl-constant); }
+.pl-e, .pl-en, .pl-mdr { color: var(--hl-entity); }
+.pl-v, .pl-smw, .pl-ml { color: var(--hl-variable); }
+.pl-ent, .pl-sr .pl-cce { color: var(--hl-tag); }
+.pl-smi, .pl-s .pl-s1 { color: var(--text); }
+.pl-bu, .pl-ii { color: var(--danger); }
+.pl-mh, .pl-mb, .pl-mdr, .pl-sr .pl-cce { font-weight: 600; }
+.pl-mi { font-style: italic; }
+.pl-corl { text-decoration: underline; }
+.pl-md { color: var(--danger); background: var(--accent-soft); }
+.pl-mi1 { color: var(--ok); background: var(--ok-soft); }
 
 /* Versions */
 .versions { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }

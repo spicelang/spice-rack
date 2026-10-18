@@ -1,0 +1,230 @@
+import "std/text/analysis";
+import "./util";
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Syntax highlighting of Spice code blocks in READMEs and changelogs. GitHub highlights the languages it knows and marks
+// the tokens with its `pl-*` classes, but Spice is not one of them: its blocks arrive as plain `<pre lang="spice">`. They
+// are highlighted here, once per sync, with the same classes, so public/style.css colours all languages alike.
+// ---------------------------------------------------------------------------------------------------------------------
+
+const string KEYWORDS = "f p if do as for ext heap else case type enum cast const while break union alias signed inline public switch assert import return struct unsafe compose default foreach unsigned continue operator interface fallthrough";
+const string PRIMITIVE_TYPES = "int short long byte char string bool double dyn";
+const string CONSTANTS = "true false nil";
+const string BUILTINS = "printf sizeof alignof len panic";
+
+/**
+ * Whether `code[from..to)` is one of the space separated words of `list`
+ */
+f<bool> isOneOf(const String& code, unsigned long from, unsigned long to, string list) {
+    const unsigned long wordLen = to - from;
+    const unsigned long listLen = getRawLength(list);
+    unsigned long start = 0l;
+    while start < listLen {
+        unsigned long end = start;
+        while end < listLen && list[end] != ' ' { end++; }
+        if end - start == wordLen {
+            bool same = true;
+            for unsigned long k = 0l; k < wordLen && same; k++ { same = code[from + k] == list[start + k]; }
+            if same { return true; }
+        }
+        start = end + 1l;
+    }
+    return false;
+}
+
+/**
+ * The code is HTML-escaped. The character at `at`, with the entities that matter for tokens decoded; `width` is set to the
+ * number of bytes it takes.
+ */
+f<char> codeChar(const String& code, unsigned long at, unsigned long& width) {
+    width = 1ul;
+    const char c = code[at];
+    if c != '&' { return c; }
+    if matchesAt(code, at, "&quot;") { width = 6ul; return '"'; }
+    if matchesAt(code, at, "&#39;") { width = 5ul; return '\''; }
+    if matchesAt(code, at, "&#x27;") { width = 6ul; return '\''; }
+    if matchesAt(code, at, "&lt;") { width = 4ul; return '<'; }
+    if matchesAt(code, at, "&gt;") { width = 4ul; return '>'; }
+    if matchesAt(code, at, "&amp;") { width = 5ul; return '&'; }
+    return c;
+}
+
+p appendSpan(String& out, const String& code, unsigned long from, unsigned long to, string cls) {
+    out += "<span class=\"";
+    out += cls;
+    out += "\">";
+    for unsigned long k = from; k < to; k++ { out.append(code[k]); }
+    out += "</span>";
+}
+
+/**
+ * Highlight the HTML-escaped Spice code `code[from..to)` and append it to `out`
+ */
+p highlightSpiceRange(const String& code, unsigned long from, unsigned long to, String& out) {
+    unsigned long i = from;
+    while i < to {
+        unsigned long width = 1ul;
+        const char c = codeChar(code, i, width);
+        const unsigned long start = i;
+        const char next = i + 1l < to ? code[i + 1l] : '\0';
+        if c == '/' && next == '/' {
+            while i < to && code[i] != '\n' { i++; }
+            appendSpan(out, code, start, i, "pl-c");
+        } else if c == '/' && next == '*' {
+            i += 2l;
+            while i < to && !(code[i] == '*' && i + 1l < to && code[i + 1l] == '/') { i++; }
+            i = i < to ? i + 2l : to;
+            appendSpan(out, code, start, i, "pl-c");
+        } else if c == '"' || c == '\'' {
+            // A string or char literal ends at the closing quote or, if it is not closed, at the end of the line
+            i += width;
+            bool escaped = false;
+            while i < to {
+                unsigned long charWidth = 1l;
+                const char sc = codeChar(code, i, charWidth);
+                if sc == '\n' { break; }
+                i += charWidth;
+                if escaped {
+                    escaped = false;
+                } else if sc == '\\' {
+                    escaped = true;
+                } else if sc == c {
+                    break;
+                }
+            }
+            appendSpan(out, code, start, i, "pl-s");
+        } else if isDigit(c) || (c == '.' && isDigit(next)) {
+            // Base prefixes, suffixes and exponents are letters, so only the dot and the exponent sign need care
+            bool sawDot = c == '.';
+            i++;
+            while i < to {
+                const char d = code[i];
+                if isAlphaNumUnderscore(d) {
+                    i++;
+                } else if d == '.' && !sawDot && i + 1l < to && isDigit(code[i + 1l]) {
+                    sawDot = true;
+                    i++;
+                } else if (d == '+' || d == '-') && sawDot && (code[i - 1l] == 'e' || code[i - 1l] == 'E') {
+                    i++;
+                } else {
+                    break;
+                }
+            }
+            appendSpan(out, code, start, i, "pl-c1");
+        } else if isAlphaUnderscore(c) {
+            while i < to && isAlphaNumUnderscore(code[i]) { i++; }
+            unsigned long after = i;
+            while after < to && code[after] == ' ' { after++; }
+            const bool call = after < to && code[after] == '(';
+            if isOneOf(code, start, i, KEYWORDS) || isOneOf(code, start, i, PRIMITIVE_TYPES) {
+                appendSpan(out, code, start, i, "pl-k");
+            } else if isOneOf(code, start, i, CONSTANTS) || (call && isOneOf(code, start, i, BUILTINS)) {
+                appendSpan(out, code, start, i, "pl-c1");
+            } else if isUpper(c) {
+                appendSpan(out, code, start, i, "pl-v");
+            } else if call {
+                appendSpan(out, code, start, i, "pl-en");
+            } else {
+                for unsigned long k = start; k < i; k++ { out.append(code[k]); }
+            }
+        } else if c == '#' && (next == '[' || (next == '!' && i + 2l < to && code[i + 2l] == '[')) {
+            // Attributes: #[test], #![core.compiler.alwaysKeepOnNameCollision = true]
+            while i < to && code[i] != ']' && code[i] != '\n' { i++; }
+            if i < to && code[i] == ']' { i++; }
+            appendSpan(out, code, start, i, "pl-e");
+        } else {
+            for unsigned long k = 0l; k < width; k++ { out.append(code[i + k]); }
+            i += width;
+        }
+    }
+}
+
+f<String> highlightSpice(const String& code) {
+    String out;
+    highlightSpiceRange(code, 0l, code.getLength(), out);
+    return out;
+}
+
+/**
+ * Whether the tag `html[from..to)` has the attribute lang="spice" (in any case, as the author wrote it)
+ */
+f<bool> hasSpiceLang(const String& html, unsigned long from, unsigned long to) {
+    const string expected = "spice\"";
+    for unsigned long k = from; k + 13l <= to; k++ {
+        if !matchesAt(html, k, " lang=\"") { continue; }
+        bool same = true;
+        for unsigned long n = 0l; n < 6l && same; n++ {
+            char c = html[k + 7l + n];
+            if c >= 'A' && c <= 'Z' { c = cast<char>(cast<int>(c) + 32); }
+            same = c == expected[n];
+        }
+        return same;
+    }
+    return false;
+}
+
+/**
+ * Highlight the Spice code blocks of HTML rendered by GitHub: `<pre lang="spice"><code>...</code></pre>`. Blocks that GitHub
+ * highlighted itself or that contain markup are left as they are.
+ */
+public f<String> highlightSpiceBlocks(const String& html) {
+    String out;
+    out.reserve(html.getLength() + 64l);
+    const unsigned long len = html.getLength();
+    unsigned long i = 0l;
+    while i < len {
+        const long preEnd = html[i] == '<' && matchesAt(html, i, "<pre ") ? html.find('>', i) : -1l;
+        if preEnd >= 0l && hasSpiceLang(html, i, cast<unsigned long>(preEnd)) {
+            unsigned long start = cast<unsigned long>(preEnd) + 1l;
+            if matchesAt(html, start, "<code") {
+                const long codeEnd = html.find('>', start);
+                if codeEnd >= 0l { start = cast<unsigned long>(codeEnd) + 1l; }
+            }
+            const long end = html.find('<', start);
+            if end >= 0l && (matchesAt(html, cast<unsigned long>(end), "</code>") || matchesAt(html, cast<unsigned long>(end), "</pre>")) {
+                for unsigned long k = i; k < start; k++ { out.append(html[k]); }
+                highlightSpiceRange(html, start, cast<unsigned long>(end), out);
+                i = cast<unsigned long>(end);
+                continue;
+            }
+        }
+        out.append(html[i]);
+        i++;
+    }
+    return out;
+}
+
+#[test]
+f<bool> testHighlightSpice() {
+    assert highlightSpice(String("f<int> main() {\n    printf(\"Hi %d\\n\", 42l); // done\n}")) ==
+        "<span class=\"pl-k\">f</span><<span class=\"pl-k\">int</span>> <span class=\"pl-en\">main</span>() {\n    " +
+        String("<span class=\"pl-c1\">printf</span>(<span class=\"pl-s\">\"Hi %d\\n\"</span>, <span class=\"pl-c1\">42l</span>); ") +
+        "<span class=\"pl-c\">// done</span>\n}";
+    // The code is HTML-escaped: entities are copied as they are, quotes may be entities as well
+    assert highlightSpice(String("String s = &quot;a\\&quot;&lt;b&quot;; char c = &#39;\\&#39;&#39;;")) ==
+        "<span class=\"pl-v\">String</span> s = <span class=\"pl-s\">&quot;a\\&quot;&lt;b&quot;</span>; " +
+        String("<span class=\"pl-k\">char</span> c = <span class=\"pl-s\">&#39;\\&#39;&#39;</span>;");
+    assert highlightSpice(String("x &amp;&amp; y.isEmpty () &gt;= 0.5e-3")) ==
+        "x &amp;&amp; y.<span class=\"pl-en\">isEmpty</span> () &gt;= <span class=\"pl-c1\">0.5e-3</span>";
+    assert highlightSpice(String("#[test]\n/** doc\n * more */ return nil; # 0x1Fs")) ==
+        "<span class=\"pl-e\">#[test]</span>\n<span class=\"pl-c\">/** doc\n * more */</span> <span class=\"pl-k\">return</span> " +
+        String("<span class=\"pl-c1\">nil</span>; # <span class=\"pl-c1\">0x1Fs</span>");
+    // Builtins only as calls, unclosed literals and comments end at the line or the code
+    assert highlightSpice(String("len = 1; \"open\n/* open")) ==
+        "len = <span class=\"pl-c1\">1</span>; <span class=\"pl-s\">\"open</span>\n<span class=\"pl-c\">/* open</span>";
+    return true;
+}
+
+#[test]
+f<bool> testHighlightSpiceBlocks() {
+    const String plain = String("<p>x</p><pre lang=\"spice\" class=\"notranslate\"><code class=\"notranslate\">return true;\n</code></pre>");
+    assert highlightSpiceBlocks(plain) == "<p>x</p><pre lang=\"spice\" class=\"notranslate\"><code class=\"notranslate\">" +
+                                          String("<span class=\"pl-k\">return</span> <span class=\"pl-c1\">true</span>;\n</code></pre>");
+    assert highlightSpiceBlocks(String("<pre class=\"x\" lang=\"Spice\">nil</pre>")) == "<pre class=\"x\" lang=\"Spice\"><span class=\"pl-c1\">nil</span></pre>";
+    // Other languages, blocks GitHub highlighted and blocks with markup stay as they are
+    const String others = String("<pre lang=\"spicelang\"><code>nil</code></pre><pre lang=\"rust\"><code>return x;</code></pre>") +
+                          "<div class=\"highlight highlight-source-c\"><pre class=\"notranslate\"><span class=\"pl-k\">int</span></pre></div>" +
+                          "<pre lang=\"spice\"><code>nil <b>x</b></code></pre><pre lang=\"spice\"";
+    assert highlightSpiceBlocks(others) == others;
+    return true;
+}
