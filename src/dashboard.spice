@@ -189,6 +189,8 @@ public f<String> handleCreatePackage(Ctx& ctx, bool adminMode) {
             return batch.finish();
         }
         JV response = ctx.res(0, 0l);
+        if githubTokenRejected(ctx, response) { return renewLogin(ctx, step > 1); }
+        if response.getNum("status") != 200l { errors.pushBack(githubErrorMessage(response) + " You can still enter the repository as owner/name."); }
         JV repos = parseJson(response.getStr("body"));
         JV taken = ctx.rows(0, 1l);
         return ctx.html(200, renderCreateForm(ctx, false, repos, taken, errors));
@@ -252,14 +254,15 @@ public f<String> handleCreatePackage(Ctx& ctx, bool adminMode) {
     JV targetRows = ctx.rows(0, 2l);
     JV targetUser = targetRows.first();
     JV permissions = repoInfo.get("permissions");
+    if !adminMode && githubTokenRejected(ctx, repoResponse) { return renewLogin(ctx, step > 1); }
     if repoResponse.getNum("status") == 404l { errors.pushBack(String("GitHub does not know this repository, or it is private.")); }
-    else if repoResponse.getNum("status") != 200l { errors.pushBack(String("GitHub could not be reached. Please try again in a moment.")); }
+    else if repoResponse.getNum("status") != 200l { errors.pushBack(githubErrorMessage(repoResponse)); }
     else if !adminMode && !permissions.getBool("push") && !permissions.getBool("admin") { errors.pushBack(String("You need push access to this repository to publish it.")); }
     else if !path.isEmpty() {
         JV manifestResponse = ctx.res(0, 3l);
         const long manifestStatus = manifestResponse.getNum("status");
         if manifestStatus == 404l { errors.pushBack(String("The directory ") + path + " of this repository has no " + MANIFEST_FILE + "."); }
-        else if manifestStatus != 200l { errors.pushBack(String("GitHub could not be reached. Please try again in a moment.")); }
+        else if manifestStatus != 200l { errors.pushBack(githubErrorMessage(manifestResponse)); }
     }
     if duplicates.size() > 0l { errors.pushBack(String("A package with this name, or for this directory of the repository, already exists.")); }
     if !targetUser.exists() { errors.pushBack(String("The maintainer has not signed in to the registry yet.")); }

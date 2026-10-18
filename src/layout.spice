@@ -125,6 +125,32 @@ public f<String> requireLogin(Ctx& ctx) {
     return ctx.redirect(String("/auth/github"));
 }
 
+/**
+ * Whether GitHub rejected the token of the session because it was revoked or has expired. Only once within a few minutes,
+ * so a token GitHub keeps rejecting ends in an error message instead of a redirect loop.
+ */
+public f<bool> githubTokenRejected(Ctx& ctx, JV response) {
+    const String renewed = ctx.cookie("rack_renew");
+    return response.getNum("status") == 401l && renewed.isEmpty();
+}
+
+/**
+ * Ends the session whose GitHub token was rejected and sends the visitor to the sign-in, which brings a fresh token.
+ * Deleting the session takes one step of the handler, `deleted` says whether it ran.
+ */
+public f<String> renewLogin(Ctx& ctx, bool deleted) {
+    if !deleted {
+        Batch batch;
+        Sql sql = Sql("DELETE FROM sessions WHERE id = ");
+        sql.ps(ctx.cookie(SESSION_COOKIE));
+        batch.query(sql);
+        return batch.finish();
+    }
+    ctx.setCookie(SESSION_COOKIE, String(""), 0l);
+    ctx.setCookie("rack_renew", String("1"), 300l);
+    return requireLogin(ctx);
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Components
 // ---------------------------------------------------------------------------------------------------------------------
