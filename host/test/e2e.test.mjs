@@ -248,6 +248,7 @@ describe('Spice Rack', { skip }, () => {
     has(home.text, /<script src="\/static\/theme.js"><\/script>/);
     has(home.text, /id="theme-toggle"/);
     has(home.text, /<script src="\/static\/dismiss.js" defer><\/script>/);
+    has(home.text, /<script src="\/static\/copy-code.js" defer><\/script>/);
     has(home.text, /<section class="cta">/);
     has(home.text, /<a href="\/packages"><strong>0<\/strong> packages<\/a>/);
     const created = await anon.get('/?notice=created');
@@ -262,6 +263,9 @@ describe('Spice Rack', { skip }, () => {
     const script = await anon.get('/static/local-time.js');
     assert.equal(script.status, 200);
     has(script.headers.get('content-type'), /text\/javascript/);
+    const copy = await anon.get('/static/copy-code.js');
+    assert.equal(copy.status, 200);
+    has(copy.headers.get('content-type'), /text\/javascript/);
     const css = await anon.get('/static/style.css');
     assert.equal(css.status, 200);
     has(css.text, /--accent/);

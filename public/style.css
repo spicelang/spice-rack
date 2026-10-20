@@ -314,6 +314,13 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .markdown-body hr { border: 0; border-top: 1px solid var(--border); margin: 1.5em 0; }
 .markdown-body ul.contains-task-list { list-style: none; padding-left: 1.2em; }
 .markdown-body .highlight pre { margin-bottom: 1em; }
+/* Copy button of code blocks (public/copy-code.js). Shown on hover and focus, always on touch screens without hover */
+.code-block { position: relative; }
+.copy-code { position: absolute; top: 8px; right: 8px; display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--muted); cursor: pointer; opacity: 0; transition: opacity .15s, color .15s, border-color .15s; }
+.code-block:hover .copy-code, .copy-code:focus-visible, .copy-code.copied { opacity: 1; }
+.copy-code:hover { color: var(--text); border-color: var(--accent); }
+.copy-code.copied { color: var(--ok); border-color: var(--ok); }
+@media (hover: none) { .copy-code { opacity: 1; } }
 /* Syntax highlighting: GitHub marks the tokens of the code blocks it highlights with its pl-* classes, Spice blocks get the
    same classes when a package is synced (src/highlight.spice) */
 .pl-c { color: var(--hl-comment); }
