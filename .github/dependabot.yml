@@ -1,24 +1,54 @@
 version: 2
 updates:
+  # Node.js host
   - package-ecosystem: npm
     directory: /host
     schedule:
       interval: weekly
+      time: "04:00"
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 15
+    target-branch: main
     groups:
       npm-minor-and-patch:
         update-types: [minor, patch]
+    assignees:
+      - marcauberer
 
+  # Dockerfile
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
+      time: "04:00"
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 15
+    target-branch: main
+    assignees:
+      - marcauberer
 
+  # Compose files (local setup and the production/staging deployment)
   - package-ecosystem: docker-compose
-    directory: /
+    directories:
+      - /
+      - /deployment
     schedule:
       interval: weekly
+      time: "04:00"
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 15
+    target-branch: main
+    assignees:
+      - marcauberer
 
+  # GitHub Actions
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+      time: "04:00"
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 15
+    target-branch: main
+    assignees:
+      - marcauberer

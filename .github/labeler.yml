@@ -1,0 +1,58 @@
+'spice':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/**/*'
+
+'host':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'host/**/*'
+
+'ui':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'templates/**/*'
+          - 'public/**/*'
+
+'database':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'db/**/*'
+
+'tests':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/tests.spice'
+          - 'host/test/**/*'
+          - 'scripts/test.sh'
+
+'deployment':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'Dockerfile'
+          - '.dockerignore'
+          - 'docker-compose.yml'
+          - '.env.example'
+          - 'deployment/**/*'
+          - 'nginx/**/*'
+          - 'scripts/init-tls.sh'
+
+'documentation':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'media/**/*'
+          - 'CODE_OF_CONDUCT.md'
+          - 'CONTRIBUTING.md'
+          - 'README.md'
+          - 'SECURITY.md'
+
+'ci':
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/**/*'
+
+'dependencies':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'host/package.json'
+          - 'host/package-lock.json'

@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Spice Rack
+    url: https://rack.spicelang.com
+    about: Search and browse the packages of the registry here.
+  - name: Spice compiler issues
+    url: https://github.com/spicelang/spice/issues
+    about: Bugs and feature requests for the Spice language, compiler or standard library belong here.
+  - name: Official Documentation
+    url: https://www.spicelang.com/language/hello-world
+    about: Find a detailed language documentation here.
