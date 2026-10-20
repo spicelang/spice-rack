@@ -1,6 +1,20 @@
-# Spice Rack
 
-The package registry for the [Spice](https://github.com/spicelang/spice) programming language, meant to run at
+<p align="center">
+  <img alt="Spice Logo" src="./media/logo-readme.png" height="230" />
+  <h3 align="center">Spice Rack</h3>
+  <p align="center">Package registry for the Spice programming language.</p>
+  <p align="center">
+    <a target="_blank" href="https://github.com/spicelang/spice-rack/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/spicelang/spice-rack?include_prereleases"></a>
+    <a target="_blank" href="https://hub.docker.com/r/chillibits/spice-rack"><img alt="Docker pulls" src="https://img.shields.io/docker/pulls/chillibits/spice-rack"></a>
+    <a target="_blank" href="https://github.com/spicelang/spice-rack/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/spicelang/spice-rack/actions/workflows/ci.yml/badge.svg"></a>
+    <a target="_blank" href="./LICENSE"><img alt="License" src="https://img.shields.io/github/license/spicelang/spice-rack"></a>
+    <a target="_blank" href="https://discord.gg/D6sCsJyWPg"><img alt="Discord server" src="https://dcbadge.limes.pink/api/server/D6sCsJyWPg?style=flat"></a>
+  </p>
+</p>
+
+---
+
+This is the package registry for the [Spice](https://github.com/spicelang/spice) programming language, meant to run at
 <https://rack.spicelang.com>. Every package is a GitHub repository (or a directory in one); its releases are the package versions.
 
 ## Features
@@ -42,6 +56,7 @@ templates/      HTML and XML templates for every page, partial and feed
 host/           Node.js host, MySQL pool, migrations runner, end-to-end tests (host/test), demo seeding (host/dev)
 db/migrations/  MySQL schema, applied in file name order on startup (tracked in the `schema_migrations` table)
 public/         CSS, the two scripts and favicons
+media/          Images for the README
 deployment/     Compose setup for a server that already runs nginx-proxy (production + staging)
 ```
 
