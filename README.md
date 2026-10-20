@@ -45,7 +45,8 @@ with either the next batch of effects (SQL statements with parameters, HTTP call
 authentication, authorization, CSRF checks, SQL, JSON, HTML rendering, semver resolution and the GitHub sync are all Spice code.
 The markup is not: it lives in `templates/` and is rendered by a small template engine (see [Templates](#templates)). The UI is
 server-rendered HTML + one CSS file; the only scripts are `public/theme.js` (light/dark switch, remembered in `localStorage`),
-`public/dismiss.js` (closes green notices) and `public/local-time.js` (shows times of day in the visitor's timezone).
+`public/dismiss.js` (closes green notices), `public/local-time.js` (shows times of day in the visitor's timezone) and
+`public/copy-code.js` (copy buttons on the code blocks of READMEs and changelogs).
 
 Because WebAssembly has no libc, `src/libc.spice` provides the handful of C functions the Spice runtime needs (a bump allocator
 that is reset for every call, `memcpy`, ...). See `scripts/build-wasm.sh` for why `wasm-ld` is invoked directly.
