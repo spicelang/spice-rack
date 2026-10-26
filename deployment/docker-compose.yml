@@ -80,7 +80,7 @@ services:
   # Restarts app-prod and app-staging when :latest or :staging changes on Docker Hub. The original containrrr/watchtower
   # is archived and too old for current Docker engines, this is its maintained fork.
   watchtower:
-    image: nickfedor/watchtower:1.23.1
+    image: nickfedor/watchtower:1.23.2
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
