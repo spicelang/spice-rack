@@ -5,19 +5,20 @@ FROM debian:bookworm-slim AS wasm
 ARG SPICE_VERSION=0.29.3
 ARG TARGETARCH
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl clang lld python3 \
+ && apt-get install -y --no-install-recommends ca-certificates curl clang lld \
  && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /opt/spice \
  && curl -fsSL "https://github.com/spicelang/spice/releases/download/${SPICE_VERSION}/spice_linux_${TARGETARCH}.tar.gz" \
   | tar -xz -C /opt/spice
+# The release archive also holds the package manager, spice-shaker
 ENV SPICE=/opt/spice/spice \
-    SPICE_STD_DIR=/opt/spice/std
+    SPICE_STD_DIR=/opt/spice/std \
+    PATH=/opt/spice:$PATH
 WORKDIR /src
-# Spice packages of src/spice.lock, downloaded from the registry (in their own layer, so they are cached until the lock
-# file changes). src/spice_packages is in .dockerignore, so local installs do not end up in the image.
-COPY src/spice.lock ./src/spice.lock
-COPY scripts/install-packages.py ./scripts/install-packages.py
-RUN python3 scripts/install-packages.py
+# Spice packages of src/spice.lock, downloaded from the registry (in their own layer, so they are cached until the
+# manifest or lock file changes). src/spice_packages is in .dockerignore, so local installs do not end up in the image.
+COPY src/spice.toml src/spice.lock ./src/
+RUN cd src && spice-shaker sync
 COPY src ./src
 COPY scripts/build-wasm.sh ./scripts/build-wasm.sh
 RUN ./scripts/build-wasm.sh /out/rack.wasm

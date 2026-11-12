@@ -53,7 +53,7 @@ browser ──HTTP──▶ host/app.mjs ──▶ rackStep(envelope JSON) ─�
 | JSON API | `src/api.spice` | `/api/v1/...`, download counting + redirect to the GitHub archive |
 | GitHub sync | `src/github.spice`, `src/tasks.spice` | Releases, README, `spice.toml` (`parseManifestDependencies`), monorepo tag matching |
 | Semver | `semver` package (`src/spice_packages/semver/semver.spice`) | Versions and constraint rules, shared with Spice Shaker; see Cross-repo contracts |
-| Spice packages | `src/spice.toml`, `src/spice.lock`, `scripts/install-packages.py` | Dependencies of the Spice code, installed to `src/spice_packages/` (git-ignored) by the script, a copy of Spice Shaker's `bootstrap.py` |
+| Spice packages | `src/spice.toml`, `src/spice.lock` | Dependencies of the Spice code, installed to `src/spice_packages/` (git-ignored) with `cd src && spice-shaker sync` |
 | Code highlighting | `src/highlight.spice` | Spice code blocks in READMEs and changelogs |
 | Native unit test entry | `src/tests.spice` | Imports every module so `spice test` runs all `#[test]` functions |
 | Host | `host/app.mjs` (HTTP server, step loop, static files, security headers), `runtime.mjs` (wasm wrapper), `effects.mjs`, `database.mjs` (pool, migrations), `templates.mjs`, `avatars.mjs`, `ratelimit.mjs`, `config.mjs` (env vars) | |
@@ -72,7 +72,6 @@ browser ──HTTP──▶ host/app.mjs ──▶ rackStep(envelope JSON) ─�
 - The `semver` package of spicelang/packages implements the version and constraint rules of the manifest spec for both
   Rack and Shaker (`import "spice_packages/semver/semver"`). A change to those rules is made there, released, and then
   bumped in `src/spice.toml` here; regenerate `src/spice.lock` with Spice Shaker (`cd src && spice-shaker update`).
-- `scripts/install-packages.py` is a copy of Spice Shaker's `bootstrap.py`; keep the two in sync.
 
 ## Spice quirks met in this code
 

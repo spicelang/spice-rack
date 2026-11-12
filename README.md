@@ -160,7 +160,7 @@ API: `GET /api/v1/packages?q=&tag=&owner=&sort=&page=` · `/api/v1/packages/{nam
 ## Development
 
 ```bash
-python3 scripts/install-packages.py   # Spice packages of src/spice.lock (semver) -> src/spice_packages, needs Python 3.11+
+(cd src && spice-shaker sync)         # Spice packages of src/spice.lock (semver) -> src/spice_packages
 scripts/build-wasm.sh                 # needs the spice compiler (SPICE=/path/to/spice) and wasm-ld (package lld)
 spice test src/tests.spice            # Spice unit tests
 cd host && npm install

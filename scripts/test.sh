@@ -5,7 +5,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SPICE="${SPICE:-spice}"
-python3 "$ROOT/scripts/install-packages.py"
+SHAKER="${SHAKER:-spice-shaker}"
+(cd "$ROOT/src" && "$SHAKER" sync)
 "$SPICE" test "$ROOT/src/tests.spice"
 "$ROOT/scripts/build-wasm.sh"
 (cd "$ROOT/host" && npm test)

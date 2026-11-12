@@ -36,8 +36,10 @@ jobs:
         with:
           spice-version: 0.29.3
 
+      # The Spice release ships the package manager next to the compiler
       - name: Install Spice packages
-        run: python3 scripts/install-packages.py
+        working-directory: src
+        run: spice-shaker sync
 
       - name: Spice unit tests
         run: spice test src/tests.spice
