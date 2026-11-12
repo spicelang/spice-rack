@@ -36,10 +36,12 @@ jobs:
         with:
           spice-version: 0.29.3
 
-      # The Spice release ships the package manager next to the compiler
+      # The Spice release ships the package manager next to the compiler. It has to reproduce the committed lock file.
       - name: Install Spice packages
         working-directory: src
-        run: spice-shaker sync
+        run: |
+          spice-shaker sync
+          git diff --exit-code -- spice.lock
 
       - name: Spice unit tests
         run: spice test src/tests.spice

@@ -59,7 +59,9 @@ public f<String> handleThing(Ctx& ctx, const String& name) {
 
 ## Templates
 
+- Syntax: the `template` package's Jinja dialect (its README); Rack adds the filters in `src/template.spice`.
 - `{{ x }}` escapes; `{{{ x }}}` is only for HTML GitHub already sanitized (README, release notes).
+- Comparisons are typed: compare numbers with numbers (`u.id == user.id`), not with quoted text.
 - Small view models are built with `view.json("name", jsonText)` from a `JsonWriter`.
 - `host/test/templates.test.mjs` fails for templates nothing includes, so remove a template together with its last use.
 - New browser JavaScript must be a file in `public/` (the CSP forbids inline scripts) and be listed in the comment of

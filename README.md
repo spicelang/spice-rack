@@ -80,21 +80,25 @@ return ctx.html(200, renderPage(ctx, "pages/search", title, description, view));
 <p>{{ total|thousands }}{% if single %} package{% else %} packages{% endif %} found</p>
 ```
 
+Templates are rendered by the [`template` package](https://github.com/spicelang/packages/tree/main/packages/template) (a Spice
+dependency in `src/spice.toml`), whose README describes the full Jinja-like syntax. The parts used here:
+
 | Syntax | Meaning |
 |---|---|
 | `{{ user.login }}` | value, **HTML-escaped**; missing values render as nothing |
 | `{{{ readme_html }}}` | value without escaping, only for markup that GitHub already sanitized |
-| `{{ x\|filter }}` | filters, chained: `url`, `count` (12.4k), `thousands`, `date`, `datetime`, `dayshort`, `isoutc`, `lower`, `head:10`, `prefix:"v"`, `split` (comma separated text to a list), `default:"text"`, `raw` |
-| `{% if a and not b %}` … `{% elif a == "x" %}` … `{% else %}` … `{% endif %}` | conditions: paths, `not`, `==`, `!=`, `and`, `or` (no parentheses) |
+| `{{ x\|filter }}` | filters, chained. Rack's own: `url` (also encodes `/`), `count` (12.4k), `thousands`, `date`, `datetime`, `dayshort`, `isoutc`; from the package e.g. `lower`, `head:10`, `prefix:"v"`, `split(",")`, `raw` |
+| `{% if a and not b %}` … `{% elif a == "x" %}` … `{% else %}` … `{% endif %}` | conditions; comparisons are typed (database ids are numbers, `"1"` is not `1`) |
 | `{% for x in list %}` … `{% else %}` … `{% endfor %}` | loops; inside: `loop.index`, `loop.index0`, `loop.first`, `loop.last`, `loop.length` |
 | `{% include "partials/tile" with value=x label="Text" %}` | partial; sees the current scope plus the arguments. The name can be a variable (`{% include page %}`); includes may recurse (dependency tree) |
 | `{# comment #}` | |
 
-Indentation is removed from the output: whitespace with a line break between two tags (or a tag and a template tag) disappears.
-A space between inline elements has to stay on one line. The host packs `templates/` into the wasm memory at startup
-(`host/templates.mjs`), the module compiles a template when it first needs it, and the host refuses to start if one is broken.
-`host/test/templates.test.mjs` checks the same without a database, and also fails for templates nothing uses. A mistake that only
-shows at render time (unknown filter) ends up as `<!-- template error: … -->` at the end of the page; the e2e tests fail on it.
+Template names are the paths below `templates/` without the extension. Indentation is removed from the output (the package's
+`stripIndentation`): whitespace with a line break between two tags (or a tag and a template tag) disappears. A space between
+inline elements has to stay on one line. The host packs `templates/` into the wasm memory at startup (`host/templates.mjs`), the
+module compiles them when it renders, and the host refuses to start if one is broken. `host/test/templates.test.mjs` checks the
+same without a database, and also fails for templates nothing uses. A mistake that only shows at render time (e.g. an unknown
+filter) replaces the page with `<!-- template error: … -->`; the e2e tests fail on it.
 
 ## Deploying (Linux server with Docker)
 

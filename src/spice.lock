@@ -7,3 +7,10 @@ source = "registry"
 version = "0.1.0"
 checksum = "sha256-tree:5cace8dcc0add376deb4fa8c8c53b6e81c59d3cc07e11b1ee856d40740db8ccd"
 dependencies = []
+
+[[package]]
+name = "template"
+source = "registry"
+version = "0.1.0"
+checksum = "sha256-tree:d0eecce1c0f3fe3a84c46243bf7cec30bcb16d0db0ef498ce2db4519de8dce1f"
+dependencies = []

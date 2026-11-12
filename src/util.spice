@@ -1,5 +1,6 @@
 import "std/data/vector";
 import "std/text/analysis";
+import "std/text/string-ext";
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Small string helpers shared by all other modules. Everything here is pure, so it can be unit-tested natively.
@@ -92,26 +93,6 @@ public f<String> lower(const String& input) {
 
 public f<bool> isSpaceChar(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
-}
-
-/**
- * Split by a separator character. Empty parts are kept.
- */
-public f<Vector<String>> split(const String& input, char separator) {
-    Vector<String> parts;
-    String current;
-    const unsigned long len = input.getLength();
-    for unsigned long i = 0l; i < len; i++ {
-        const char c = input[i];
-        if c == separator {
-            parts.pushBack(current);
-            current = String("");
-        } else {
-            current.append(c);
-        }
-    }
-    parts.pushBack(current);
-    return parts;
 }
 
 public f<String> joinPath(const Vector<String>& parts, string separator) {

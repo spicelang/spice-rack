@@ -17,8 +17,8 @@ async function walk(dir, prefix = '') {
 /**
  * Reads the template files and packs them into the format the wasm module expects: for each template
  * `name\x02length\x03source`, where the name is the path below `dir` without its extension ("partials/card") and the
- * length is the size of the source in bytes. The module reads the headers when it starts to render and compiles a
- * template when it first needs it, see src/template.spice.
+ * length is the size of the source in bytes. The module hands the templates to the template package when it renders,
+ * see src/template.spice.
  *
  * @returns {Promise<Buffer>} the blob
  */
