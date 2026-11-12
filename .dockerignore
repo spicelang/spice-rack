@@ -8,3 +8,4 @@ host/test/
 host/dev/
 volumes/
 data/
+src/spice_packages
