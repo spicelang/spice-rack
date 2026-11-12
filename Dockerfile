@@ -2,7 +2,7 @@
 
 # ---- Stage 1: compile the application logic (Spice) to WebAssembly --------------------------------------------------
 FROM debian:bookworm-slim AS wasm
-ARG SPICE_VERSION=0.29.0
+ARG SPICE_VERSION=0.29.3
 ARG TARGETARCH
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl clang lld \

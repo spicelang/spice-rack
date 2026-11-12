@@ -37,7 +37,7 @@ public f<unsigned int> rackArenaUsed() {
     return cast<unsigned int>(ARENA_CURSOR - ARENA_START);
 }
 
-#[core.compiler.mangle = false]
+#[core.compiler.mangle = false, core.compiler.allocFunction]
 public f<heap byte*> malloc(unsigned long size) {
     const unsigned long aligned = (size + 15l) & ~15l;
     if ARENA_CURSOR + aligned > ARENA_END { return nil<heap byte*>; }
@@ -48,13 +48,13 @@ public f<heap byte*> malloc(unsigned long size) {
     unsafe { return cast<heap byte*>(addr); }
 }
 
-#[core.compiler.mangle = false]
+#[core.compiler.mangle = false, core.compiler.deallocFunction]
 public p free(heap byte* ptr) {
     // Memory is reclaimed in bulk when the arena is reset. Forget the pointer, so it is not freed by the runtime.
     unsafe { cast<unsigned long>(ptr); }
 }
 
-#[core.compiler.mangle = false]
+#[core.compiler.mangle = false, core.compiler.reallocFunction]
 public f<heap byte*> realloc(heap byte* ptr, unsigned long size) {
     unsafe {
         const unsigned long oldAddr = cast<unsigned long>(ptr);
