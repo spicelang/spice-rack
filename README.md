@@ -96,9 +96,10 @@ dependency in `src/spice.toml`), whose README describes the full Jinja-like synt
 Template names are the paths below `templates/` without the extension. Indentation is removed from the output (the package's
 `stripIndentation`): whitespace with a line break between two tags (or a tag and a template tag) disappears. A space between
 inline elements has to stay on one line. The host packs `templates/` into the wasm memory at startup (`host/templates.mjs`), the
-module compiles them when it renders, and the host refuses to start if one is broken. `host/test/templates.test.mjs` checks the
-same without a database, and also fails for templates nothing uses. A mistake that only shows at render time (e.g. an unknown
-filter) replaces the page with `<!-- template error: … -->`; the e2e tests fail on it.
+module compiles a template when a render first needs it (the package's `lazyCompile`), and the host refuses to start if one is
+broken. `host/test/templates.test.mjs` checks the same without a database, and also fails for templates nothing uses. A mistake
+that only shows at render time (e.g. an unknown filter) replaces the page with `<!-- template error: … -->`; the e2e tests fail on
+it.
 
 ## Deploying (Linux server with Docker)
 

@@ -145,6 +145,7 @@ p TemplateSet.setUp() {
     if this.ready { return; }
     this.ready = true;
     this.engine.stripIndentation = true;
+    this.engine.lazyCompile = true;  // Most requests use a handful of the templates
     addRackFilters(this.engine);
 }
 
