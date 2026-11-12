@@ -1,4 +1,5 @@
 import "std/data/vector";
+import "std/text/string-ext";
 import "./util";
 import "./json";
 

@@ -224,3 +224,388 @@ public f<double> strtod(string s, char** end) {
     }
     return value;
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// snprintf, which the std uses to turn numbers into text (toString in std/type/type-conversion, e.g. via the template
+// package).
+//
+// Supports the flags - + space # 0, width and precision (also as *), the length modifiers hh h l ll z j t L and the
+// conversions d i u o x X c s p f F e E g G and %%. The variadic arguments arrive as the address of a buffer in which
+// each argument is aligned to its size, as clang lays them out for wasm32: int and smaller types (promoted to int) and
+// pointers take 4 bytes, long long and double 8. Floating point output is exact to about 17 significant digits.
+// ---------------------------------------------------------------------------------------------------------------------
+
+type VaReader struct {
+    public unsigned long addr = 0l
+}
+
+f<long> VaReader.nextI32() {
+    this.addr = (this.addr + 3l) & ~3l;
+    long value = 0l;
+    unsafe {
+        int* slot = cast<int*>(this.addr);
+        value = cast<long>(slot[0l]);
+    }
+    this.addr += 4l;
+    return value;
+}
+
+f<long> VaReader.nextI64() {
+    this.addr = (this.addr + 7l) & ~7l;
+    long value = 0l;
+    unsafe {
+        long* slot = cast<long*>(this.addr);
+        value = slot[0l];
+    }
+    this.addr += 8l;
+    return value;
+}
+
+f<double> VaReader.nextF64() {
+    this.addr = (this.addr + 7l) & ~7l;
+    double value = 0.0;
+    unsafe {
+        double* slot = cast<double*>(this.addr);
+        value = slot[0l];
+    }
+    this.addr += 8l;
+    return value;
+}
+
+f<String> fmtUnsigned(unsigned long value, unsigned long base, bool upper) {
+    if value == 0l { return String("0"); }
+    String digits;
+    unsigned long rest = value;
+    while rest != 0l {
+        const int digit = cast<int>(rest % base);
+        digits.append(cast<char>(digit < 10 ? 48 + digit : (upper ? 55 : 87) + digit));
+        rest /= base;
+    }
+    digits.reverse();
+    return digits;
+}
+
+/**
+ * Round a non-negative value below 2^63 to an integer like printf does: by its exact remainder, ties to even
+ */
+f<unsigned long> fmtRound(double value) {
+    unsigned long whole = cast<unsigned long>(value);
+    const double remainder = value - cast<double>(whole);  // Exact, since both are close
+    if remainder > 0.5 || (remainder == 0.5 && whole % 2l == 1l) { whole++; }
+    return whole;
+}
+
+f<double> fmtPow10(int exponent) {
+    double power = 1.0;
+    for int i = 0; i < exponent; i++ { power *= 10.0; }
+    return power;
+}
+
+/**
+ * Decimal exponent of a positive finite value: 1234.5 -> 3, 0.012 -> -2
+ */
+f<int> fmtExponent(double value) {
+    int exponent = 0;
+    double rest = value;
+    while rest >= 10.0 { rest /= 10.0; exponent++; }
+    while rest < 1.0 { rest *= 10.0; exponent--; }
+    return exponent;
+}
+
+/**
+ * The first `count` significant digits of a positive finite value, rounded (count <= 17). `exponent` is the decimal
+ * exponent of the first digit and is adjusted when rounding carries over (9.99 -> 10.0).
+ */
+f<String> fmtSignificant(double value, int count, int& exponent) {
+    exponent = fmtExponent(value);
+    const int shift = count - 1 - exponent;
+    const double scaled = shift >= 0 ? value * fmtPow10(shift) : value / fmtPow10(-shift);
+    unsigned long digits = fmtRound(scaled);
+    if digits >= cast<unsigned long>(fmtPow10(count)) {
+        digits = (digits + 5l) / 10l;
+        exponent++;
+    }
+    String text = fmtUnsigned(digits, 10l, false);
+    while text.getLength() < cast<unsigned long>(count) { text.append('0'); }
+    return text;
+}
+
+/**
+ * %f of a non-negative finite value
+ */
+f<String> fmtFixed(double value, int precision) {
+    String text;
+    if value != 0.0 && value * fmtPow10(precision) < 9000000000000000000.0 {
+        const unsigned long unit = cast<unsigned long>(fmtPow10(precision));
+        const unsigned long scaled = fmtRound(value * fmtPow10(precision));
+        text = fmtUnsigned(scaled / unit, 10l, false);
+        if precision > 0 {
+            String fraction = fmtUnsigned(scaled % unit, 10l, false);
+            while fraction.getLength() < cast<unsigned long>(precision) { fraction = String("0") + fraction; }
+            text += "." + fraction;
+        }
+        return text;
+    }
+    // Too large for the integer path: the first 17 significant digits, the rest zeros
+    String digits;
+    int exponent = 0;
+    if value != 0.0 { digits = fmtSignificant(value, 17, exponent); }
+    while digits.getLength() < cast<unsigned long>(exponent + 1) { digits.append('0'); }
+    if value == 0.0 || exponent < 0 {
+        text = String("0");
+        String leading;
+        for int i = exponent + 1; i < 0; i++ { leading.append('0'); }
+        digits = value == 0.0 ? String("") : leading + digits;
+    } else {
+        text = digits.getSubstring(0l, cast<long>(exponent + 1));
+        digits = digits.getSubstring(cast<unsigned long>(exponent + 1));
+    }
+    if precision > 0 {
+        while digits.getLength() < cast<unsigned long>(precision) { digits.append('0'); }
+        text += "." + digits.getSubstring(0l, cast<long>(precision));
+    }
+    return text;
+}
+
+f<String> fmtExponentSuffix(int exponent, bool upper) {
+    String text;
+    text.append(upper ? 'E' : 'e');
+    text.append(exponent < 0 ? '-' : '+');
+    const int magnitude = exponent < 0 ? -exponent : exponent;
+    if magnitude < 10 { text.append('0'); }
+    text += fmtUnsigned(cast<unsigned long>(magnitude), 10l, false);
+    return text;
+}
+
+/**
+ * %e of a non-negative finite value
+ */
+f<String> fmtScientific(double value, int precision, bool upper) {
+    int exponent = 0;
+    String digits;
+    const int count = precision + 1 > 17 ? 17 : precision + 1;
+    if value == 0.0 {
+        for int i = 0; i < count; i++ { digits.append('0'); }
+    } else {
+        digits = fmtSignificant(value, count, exponent);
+    }
+    while digits.getLength() < cast<unsigned long>(precision + 1) { digits.append('0'); }
+    String text;
+    text.append(digits[0l]);
+    if precision > 0 { text += "." + digits.getSubstring(1l); }
+    return text + fmtExponentSuffix(exponent, upper);
+}
+
+/**
+ * Drop trailing zeros of the fraction, and the point if nothing is left after it
+ */
+f<String> fmtStripZeros(const String& text) {
+    if text.find('.') < 0l { return text; }
+    long end = cast<long>(text.getLength());
+    while end > 0l && text[cast<unsigned long>(end - 1l)] == '0' { end--; }
+    if end > 0l && text[cast<unsigned long>(end - 1l)] == '.' { end--; }
+    return text.getSubstring(0l, end);
+}
+
+/**
+ * %g of a non-negative finite value
+ */
+f<String> fmtGeneral(double value, int precision, bool upper, bool keepZeros) {
+    const int count = precision == 0 ? 1 : (precision > 17 ? 17 : precision);
+    if value == 0.0 {
+        return keepZeros && count > 1 ? fmtFixed(0.0, count - 1) : String("0");
+    }
+    int exponent = 0;
+    fmtSignificant(value, count, exponent);
+    if exponent >= -4 && exponent < count {
+        const String fixed = fmtFixed(value, count - 1 - exponent);
+        return keepZeros ? fixed : fmtStripZeros(fixed);
+    }
+    const String scientific = fmtScientific(value, count - 1, upper);
+    if keepZeros { return scientific; }
+    const long e = scientific.find(upper ? 'E' : 'e');
+    return fmtStripZeros(scientific.getSubstring(0l, e)) + scientific.getSubstring(cast<unsigned long>(e));
+}
+
+type FmtSink struct {
+    public unsigned long dst = 0l   // Address of the buffer, 0 if the output is only measured
+    public unsigned long cap = 0l   // Its size, including the terminating NUL
+    public unsigned long len = 0l   // Characters produced so far (also those that did not fit)
+}
+
+p FmtSink.put(char c) {
+    if this.dst != 0l && this.len + 1l < this.cap {
+        unsafe {
+            byte* out = cast<byte*>(this.dst);
+            out[this.len] = cast<byte>(c);
+        }
+    }
+    this.len++;
+}
+
+p FmtSink.putAll(const String& text) {
+    for unsigned long i = 0l; i < text.getLength(); i++ { this.put(text[i]); }
+}
+
+/**
+ * Write a converted field with its sign or prefix, padded to the width
+ */
+p FmtSink.field(const String& prefix, const String& body, long width, bool left, bool zeroPad) {
+    const long used = cast<long>(prefix.getLength() + body.getLength());
+    const long padding = width > used ? width - used : 0l;
+    if !left && !zeroPad { for long i = 0l; i < padding; i++ { this.put(' '); } }
+    this.putAll(prefix);
+    if !left && zeroPad { for long i = 0l; i < padding; i++ { this.put('0'); } }
+    this.putAll(body);
+    if left { for long i = 0l; i < padding; i++ { this.put(' '); } }
+}
+
+#[core.compiler.mangle = false]
+public f<int> snprintf(char* buffer, unsigned long size, string format, byte* args) {
+    FmtSink sink;
+    VaReader va;
+    unsafe {
+        sink.dst = cast<unsigned long>(buffer);
+        va.addr = cast<unsigned long>(args);
+    }
+    sink.cap = size;
+    unsafe {
+        byte* fmt = cast<byte*>(format);
+        unsigned long i = 0l;
+        while fmt[i] != cast<byte>(0) {
+            const char c = cast<char>(fmt[i]);
+            i++;
+            if c != '%' { sink.put(c); continue; }
+            // Flags
+            bool left = false;
+            bool plus = false;
+            bool space = false;
+            bool alt = false;
+            bool zero = false;
+            while true {
+                const char flag = cast<char>(fmt[i]);
+                if flag == '-' { left = true; }
+                else if flag == '+' { plus = true; }
+                else if flag == ' ' { space = true; }
+                else if flag == '#' { alt = true; }
+                else if flag == '0' { zero = true; }
+                else { break; }
+                i++;
+            }
+            // Width and precision
+            long width = 0l;
+            if cast<char>(fmt[i]) == '*' {
+                width = va.nextI32();
+                if width < 0l { left = true; width = -width; }
+                i++;
+            } else {
+                while digitValue(fmt[i]) < 10 { width = width * 10l + cast<long>(digitValue(fmt[i])); i++; }
+            }
+            long precision = -1l;
+            if cast<char>(fmt[i]) == '.' {
+                i++;
+                precision = 0l;
+                if cast<char>(fmt[i]) == '*' {
+                    precision = va.nextI32();
+                    i++;
+                } else {
+                    while digitValue(fmt[i]) < 10 { precision = precision * 10l + cast<long>(digitValue(fmt[i])); i++; }
+                }
+            }
+            // Length: only "ll" and "j" (64 bit) and "L" (long double, unsupported) change the size on wasm32
+            bool wide = false;
+            while true {
+                const char mod = cast<char>(fmt[i]);
+                if mod == 'l' && cast<char>(fmt[i + 1l]) == 'l' { wide = true; i += 2l; }
+                else if mod == 'j' { wide = true; i++; }
+                else if mod == 'h' || mod == 'l' || mod == 'z' || mod == 't' || mod == 'L' { i++; }
+                else { break; }
+            }
+            const char conv = cast<char>(fmt[i]);
+            if conv == cast<char>(0) { break; }
+            i++;
+            if conv == '%' { sink.put('%'); continue; }
+            if conv == 'd' || conv == 'i' {
+                const long value = wide ? va.nextI64() : va.nextI32();
+                const bool negative = value < 0l;
+                const unsigned long magnitude = negative ? cast<unsigned long>(-(value + 1l)) + 1l : cast<unsigned long>(value);
+                String body = precision == 0l && value == 0l ? String("") : fmtUnsigned(magnitude, 10l, false);
+                while precision > 0l && cast<long>(body.getLength()) < precision { body = String("0") + body; }
+                const String sign = String(negative ? "-" : (plus ? "+" : (space ? " " : "")));
+                sink.field(sign, body, width, left, zero && precision < 0l);
+                continue;
+            }
+            if conv == 'u' || conv == 'x' || conv == 'X' || conv == 'o' || conv == 'p' {
+                unsigned long value = 0l;
+                if conv == 'p' || !wide { value = cast<unsigned long>(va.nextI32()) & 4294967295l; }
+                else { value = cast<unsigned long>(va.nextI64()); }
+                const unsigned long base = conv == 'o' ? 8l : (conv == 'u' ? 10l : 16l);
+                String body = precision == 0l && value == 0l ? String("") : fmtUnsigned(value, base, conv == 'X');
+                while precision > 0l && cast<long>(body.getLength()) < precision { body = String("0") + body; }
+                String prefix;
+                if conv == 'p' || (alt && value != 0l && base == 16l) { prefix = String(conv == 'X' ? "0X" : "0x"); }
+                if alt && conv == 'o' && !body.startsWith("0") { body = String("0") + body; }
+                sink.field(prefix, body, width, left, zero && precision < 0l);
+                continue;
+            }
+            if conv == 'c' {
+                String body;
+                body.append(cast<char>(va.nextI32()));
+                sink.field(String(""), body, width, left, false);
+                continue;
+            }
+            if conv == 's' {
+                const unsigned long address = cast<unsigned long>(va.nextI32()) & 4294967295l;
+                String body;
+                if address == 0l {
+                    body = String("(null)");
+                } else {
+                    byte* text = cast<byte*>(address);
+                    unsigned long k = 0l;
+                    while text[k] != cast<byte>(0) && (precision < 0l || cast<long>(k) < precision) {
+                        body.append(cast<char>(text[k]));
+                        k++;
+                    }
+                }
+                sink.field(String(""), body, width, left, false);
+                continue;
+            }
+            if conv == 'f' || conv == 'F' || conv == 'e' || conv == 'E' || conv == 'g' || conv == 'G' {
+                double value = va.nextF64();
+                const bool upper = conv == 'F' || conv == 'E' || conv == 'G';
+                const bool negative = value < 0.0;
+                if negative { value = -value; }
+                const String sign = String(negative ? "-" : (plus ? "+" : (space ? " " : "")));
+                const int digits = precision < 0l ? 6 : cast<int>(precision);
+                String body;
+                bool finite = true;
+                if value != value {
+                    body = String(upper ? "NAN" : "nan");
+                    finite = false;
+                } else if value - value != 0.0 {
+                    body = String(upper ? "INF" : "inf");
+                    finite = false;
+                } else if conv == 'f' || conv == 'F' {
+                    body = fmtFixed(value, digits);
+                } else if conv == 'e' || conv == 'E' {
+                    body = fmtScientific(value, digits, upper);
+                } else {
+                    body = fmtGeneral(value, digits, upper, alt);
+                }
+                sink.field(sign, body, width, left, zero && finite);
+                continue;
+            }
+            // Unknown conversion: print it as it is
+            sink.put('%');
+            sink.put(conv);
+        }
+    }
+    if sink.dst != 0l && sink.cap > 0l {
+        const unsigned long end = sink.len < sink.cap ? sink.len : sink.cap - 1l;
+        unsafe {
+            byte* out = cast<byte*>(sink.dst);
+            out[end] = cast<byte>(0);
+        }
+    }
+    return cast<int>(sink.len);
+}

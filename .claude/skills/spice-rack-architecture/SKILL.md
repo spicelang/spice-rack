@@ -41,10 +41,10 @@ browser ──HTTP──▶ host/app.mjs ──▶ rackStep(envelope JSON) ─�
 |------|---------|-------|
 | wasm exports, router | `src/main.spice` | `rackStep`, `route`, `routeApi`. Every `public` `rack*` function is exported by `scripts/build-wasm.sh` |
 | Request context, SQL builder, batches, responses | `src/core.spice` | `Ctx`, `Sql` (`ps`/`pn` = placeholder + param), `Batch`, `Ctx.respond` & friends |
-| libc shim for wasm | `src/libc.spice` | Bump allocator, `memcpy`, `strtoll`/`strtod`, … that the Spice runtime needs |
+| libc shim for wasm | `src/libc.spice` | Bump allocator, `memcpy`, `strtoll`/`strtod`, `snprintf` (number formatting of the std), … that the Spice runtime needs |
 | Shared helpers | `src/util.spice` | String/URL helpers, `isValidPackageName` / `packageNameRule` (single source of the name rule) |
 | JSON | `src/json.spice` | `JV` (read-only view of parsed JSON) and `JsonWriter` |
-| Templates | `src/template.spice`, `src/layout.spice`, `templates/` | Engine + `View`; `renderPage` wraps a page in `templates/layout.html` |
+| Templates | `src/template.spice`, `src/layout.spice`, `templates/` | `View` and `TemplateSet` over the `template` package (Rack's filters, `stripIndentation`); `renderPage` wraps a page in `templates/layout.html` |
 | Public pages | `src/pages_public.spice`, `src/search.spice` | Home, search, docs, robots/sitemap/OpenSearch |
 | Package page | `src/pages_package.spice` | README, versions, dependency tree, stats |
 | Sign-in | `src/auth.spice` | GitHub OAuth, sessions (14 days), CSRF token |
@@ -69,6 +69,7 @@ browser ──HTTP──▶ host/app.mjs ──▶ rackStep(envelope JSON) ─�
 - Spice Shaker consumes the JSON API (`/api/v1/packages/{name}`, `.../versions/{version}/download`, the `path` field for
   packages in a subdirectory). Changing the API shape breaks the package manager.
 - [spicelang/packages](https://github.com/spicelang/packages) is the reference monorepo: tags like `github-v0.2.0`.
+- The `template` package of spicelang/packages renders `templates/`; its syntax is described in its README.
 - The `semver` package of spicelang/packages implements the version and constraint rules of the manifest spec for both
   Rack and Shaker (`import "spice_packages/semver/semver"`). A change to those rules is made there, released, and then
   bumped in `src/spice.toml` here; regenerate `src/spice.lock` with Spice Shaker (`cd src && spice-shaker update`).

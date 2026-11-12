@@ -11,3 +11,4 @@ entry = "main.spice"
 
 [dependencies]
 semver = "^0.1.0"
+template = "^0.1.1"
