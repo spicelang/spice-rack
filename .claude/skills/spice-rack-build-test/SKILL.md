@@ -5,7 +5,7 @@ description: Build and test Spice Rack — compile the Spice sources to `build/r
 
 # Build and test Spice Rack
 
-CI (`.github/workflows/ci.yml`) runs, in this order: Spice unit tests → wasm build → `npm ci` → lint → host tests
+CI (`.github/workflows/ci.yml`) runs, in this order: install Spice packages → Spice unit tests → wasm build → `npm ci` → lint → host tests
 against a MySQL 26.7 service. Reproduce the same sequence locally before pushing.
 
 ## Prerequisites
@@ -14,6 +14,17 @@ against a MySQL 26.7 service. Reproduce the same sequence locally before pushing
   The compiler needs its std; with a release archive set `SPICE_STD_DIR=<spice-dir>/std`.
 - `wasm-ld` (package `lld`) and `clang`. `build-wasm.sh` also finds `/usr/bin/wasm-ld-*`, or set `WASM_LD`.
 - Node.js (CI uses 26; `host/package.json` needs >= 20) and Docker or a local MySQL for the end-to-end tests.
+- `spice-shaker`, which the Spice release archives for Linux and macOS ship next to the compiler (`SHAKER` overrides
+  it in `scripts/test.sh`), and network access to `rack.spicelang.com` and GitHub for the Spice packages.
+
+## Install the Spice packages
+
+```sh
+(cd src && spice-shaker sync)       # src/spice_packages from src/spice.lock, checksums verified
+```
+
+The unit tests and the wasm build import the `semver` package from there, so run this first (and again after
+`src/spice.lock` changes). The Docker image runs it in its wasm stage.
 
 ## Spice unit tests (native, fast)
 

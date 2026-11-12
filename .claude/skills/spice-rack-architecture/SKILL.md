@@ -52,7 +52,8 @@ browser ──HTTP──▶ host/app.mjs ──▶ rackStep(envelope JSON) ─�
 | Admin | `src/admin.spice` | Usage overview, user and package management |
 | JSON API | `src/api.spice` | `/api/v1/...`, download counting + redirect to the GitHub archive |
 | GitHub sync | `src/github.spice`, `src/tasks.spice` | Releases, README, `spice.toml` (`parseManifestDependencies`), monorepo tag matching |
-| Semver | `src/semver.spice` | Constraint rules shared in spirit with Spice Shaker's `src/semver.spice` |
+| Semver | `semver` package (`src/spice_packages/semver/semver.spice`) | Versions and constraint rules, shared with Spice Shaker; see Cross-repo contracts |
+| Spice packages | `src/spice.toml`, `src/spice.lock` | Dependencies of the Spice code, installed to `src/spice_packages/` (git-ignored) with `cd src && spice-shaker sync` |
 | Code highlighting | `src/highlight.spice` | Spice code blocks in READMEs and changelogs |
 | Native unit test entry | `src/tests.spice` | Imports every module so `spice test` runs all `#[test]` functions |
 | Host | `host/app.mjs` (HTTP server, step loop, static files, security headers), `runtime.mjs` (wasm wrapper), `effects.mjs`, `database.mjs` (pool, migrations), `templates.mjs`, `avatars.mjs`, `ratelimit.mjs`, `config.mjs` (env vars) | |
@@ -68,6 +69,9 @@ browser ──HTTP──▶ host/app.mjs ──▶ rackStep(envelope JSON) ─�
 - Spice Shaker consumes the JSON API (`/api/v1/packages/{name}`, `.../versions/{version}/download`, the `path` field for
   packages in a subdirectory). Changing the API shape breaks the package manager.
 - [spicelang/packages](https://github.com/spicelang/packages) is the reference monorepo: tags like `github-v0.2.0`.
+- The `semver` package of spicelang/packages implements the version and constraint rules of the manifest spec for both
+  Rack and Shaker (`import "spice_packages/semver/semver"`). A change to those rules is made there, released, and then
+  bumped in `src/spice.toml` here; regenerate `src/spice.lock` with Spice Shaker (`cd src && spice-shaker update`).
 
 ## Spice quirks met in this code
 

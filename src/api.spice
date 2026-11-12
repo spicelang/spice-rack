@@ -4,7 +4,6 @@ import "./json";
 import "./core";
 import "./layout";
 import "./search";
-import "./semver";
 
 // ---------------------------------------------------------------------------------------------------------------------
 // JSON API (/api/v1) and the counted download endpoint

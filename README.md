@@ -53,6 +53,7 @@ that is reset for every call, `memcpy`, ...). See `scripts/build-wasm.sh` for wh
 
 ```
 src/            Spice sources (main.spice = router and wasm exports, one file per area; unit tests sit next to the code)
+                and spice.toml / spice.lock for the Spice packages it uses (semver), installed to src/spice_packages/
 templates/      HTML and XML templates for every page, partial and feed
 host/           Node.js host, MySQL pool, migrations runner, end-to-end tests (host/test), demo seeding (host/dev)
 db/migrations/  MySQL schema, applied in file name order on startup (tracked in the `schema_migrations` table)
@@ -106,8 +107,9 @@ shows at render time (unknown filter) ends up as `<!-- template error: … -->` 
    For local use, `DOMAIN=localhost scripts/init-tls.sh` creates a self-signed certificate instead.
 
 `docker-compose.yml` starts MySQL 26.7 (persistent volume), the app (the `Dockerfile` downloads the Spice release given by
-`SPICE_VERSION`, compiles the wasm module and ships it with the Node host) and nginx, which terminates TLS (Let's Encrypt via
-certbot, renewed automatically). The schema is migrated on startup. Back up `./volumes/mysql-data` (or use `mysqldump`).
+`SPICE_VERSION` and the Spice packages of `src/spice.lock` from the registry, compiles the wasm module and ships it with the Node
+host) and nginx, which terminates TLS (Let's Encrypt via certbot, renewed automatically). The schema is migrated on startup. Back
+up `./volumes/mysql-data` (or use `mysqldump`).
 
 Without nginx (own proxy): publish port 8080 of `app`, set `TRUST_PROXY=1` only if a proxy sets `X-Forwarded-For`.
 
@@ -158,6 +160,7 @@ API: `GET /api/v1/packages?q=&tag=&owner=&sort=&page=` · `/api/v1/packages/{nam
 ## Development
 
 ```bash
+(cd src && spice-shaker sync)         # Spice packages of src/spice.lock (semver) -> src/spice_packages
 scripts/build-wasm.sh                 # needs the spice compiler (SPICE=/path/to/spice) and wasm-ld (package lld)
 spice test src/tests.spice            # Spice unit tests
 cd host && npm install

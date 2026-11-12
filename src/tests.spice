@@ -1,7 +1,6 @@
 // Entry point for the native unit tests: `spice test src/tests.spice`
 import "./util";
 import "./json";
-import "./semver";
 import "./core";
 import "./template";
 import "./layout";
