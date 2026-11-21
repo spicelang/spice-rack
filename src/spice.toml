@@ -12,4 +12,4 @@ entry = "main.spice"
 [dependencies]
 manifest = "^0.1.1"
 semver = "^0.1.0"
-template = "^0.1.1"
+template = "^0.2.0"
