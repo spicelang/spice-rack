@@ -33,8 +33,7 @@ The unit tests and the wasm build import the `semver` package from there, so run
 ```
 
 `src/tests.spice` imports every module, so all `#[test]` functions next to the code run. A new module with tests must
-be added to its imports. If tests behave strangely after a struct used inside a `Vector<…>` in other files changed,
-build once with `--ignore-cache`.
+be added to its imports. The `#[test]` functions of the Spice packages run as well.
 
 ## Build the WebAssembly module
 

@@ -1,6 +1,5 @@
 import "std/data/vector";
-import "std/text/toml/toml-value";
-import "std/text/toml/toml-parser";
+import "spice_packages/manifest/manifest";
 import "spice_packages/semver/semver";
 import "./util";
 import "./json";
@@ -20,13 +19,14 @@ import "./highlight";
 // ---------------------------------------------------------------------------------------------------------------------
 
 public const string GITHUB_API = "https://api.github.com";
-public const string MANIFEST_FILE = "spice.toml";
 const unsigned long MAX_RELEASES = 30l;
 // The releases of a repository with several packages are shared by all of them, so more are fetched to find 30 of one package
 const unsigned long RELEASES_PER_PAGE = 30l;
 const unsigned long SHARED_RELEASES_PER_PAGE = 100l;
 const unsigned long MAX_MANIFESTS = 10l;
 const unsigned long MAX_README_BYTES = 1500000l;
+const unsigned long MAX_DEPENDENCIES = 100l;
+const unsigned long MAX_CONSTRAINT_LENGTH = 64l; // package_dependencies.constraint_text
 
 public type SyncJob struct {
     public long packageId = 0l
@@ -44,12 +44,6 @@ public type Release struct {
     public bool prerelease = false
     public String publishedAt
     public String tarballUrl
-}
-
-public type Dependency struct {
-    public String name
-    public String constraint
-    public bool dev = false
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -209,48 +203,32 @@ public f<Vector<Release>> parseReleases(JV releases, const String& owner, const 
 }
 
 /**
- * Registry dependencies declared in a spice.toml manifest (see the manifest spec of Spice Shaker):
- *   [dependencies]
- *   other-package = "^1.2.0"
- *   another = { version = "~2.0" }
- *   [dev-dependencies]
- *   ...
- * GitHub and path dependencies are not registry dependencies and are skipped. A manifest that is not valid TOML has none.
+ * Read a spice.toml with the manifest package, which specifies the format for the registry and Spice Shaker alike. The
+ * registry only shows what a release declares, so the result holds every valid part of the manifest, even if other parts
+ * are invalid (see parseManifest). A manifest that is not valid TOML is empty.
+ */
+public f<Manifest> readManifest(const String& manifestText) {
+    Manifest manifest;
+    Vector<String> errors;
+    const bool _ = parseManifest(manifestText, String(MANIFEST_FILE), manifest, errors); // Whether all of it is valid
+    return manifest;
+}
+
+/**
+ * Registry dependencies declared in a spice.toml manifest, of [dependencies] first, then of [dev-dependencies]. GitHub and
+ * path dependencies are not in the registry, and dependencies with an invalid name or constraint are left out, as Spice
+ * Shaker rejects them.
  */
 public f<Vector<Dependency>> parseManifestDependencies(const String& manifestText) {
+    const Manifest manifest = readManifest(manifestText);
     Vector<Dependency> deps;
-    Result<TomlValue*> parsed = parseToml(manifestText);
-    if !parsed.isOk() { return deps; }
-    TomlValue* root = parsed.unwrap();
-    for int pass = 0; pass < 2; pass++ {
-        TomlValue* section = root.getFieldOrNil(pass == 0 ? "dependencies" : "dev-dependencies");
-        if section == nil<TomlValue*> || !section.isTable() { continue; }
-        for unsigned long i = 0l; i < section.getTableSize() && deps.getSize() < 100l; i++ {
-            TomlValue* spec = section.getTableValue(i);
-            String rawConstraint;
-            if spec.isString() {
-                rawConstraint = spec.getString();
-            } else if spec.isTable() && !spec.hasField("github") && !spec.hasField("path") {
-                TomlValue* version = spec.getFieldOrNil("version");
-                if version == nil<TomlValue*> || !version.isString() { continue; }
-                rawConstraint = version.getString();
-            } else {
-                continue;
-            }
-            Dependency dep;
-            dep.name = section.getTableKey(i);
-            dep.constraint = rawConstraint.trim();
-            if dep.constraint.isEmpty() || dep.constraint.getLength() > 64l { dep.constraint = String("*"); }
-            dep.dev = pass == 1;
-            if !isValidPackageName(dep.name) { continue; }
-            bool duplicate = false;
-            for unsigned long k = 0l; k < deps.getSize(); k++ {
-                if deps.get(k).name == dep.name { duplicate = true; }
-            }
-            if !duplicate { deps.pushBack(dep); }
-        }
+    for unsigned long i = 0l; i < manifest.dependencies.getSize() && deps.getSize() < MAX_DEPENDENCIES; i++ {
+        Dependency dep = manifest.dependencies.get(i);
+        if dep.source != DependencySource::REGISTRY { continue; }
+        dep.version = dep.version.trim();
+        if dep.version.getLength() > MAX_CONSTRAINT_LENGTH { dep.version = String("*"); }
+        deps.pushBack(dep);
     }
-    deleteTomlValue(root);
     return deps;
 }
 
@@ -258,20 +236,9 @@ public f<Vector<Dependency>> parseManifestDependencies(const String& manifestTex
  * `description` of the [package] table of a spice.toml manifest, empty if it has none
  */
 public f<String> parseManifestDescription(const String& manifestText) {
-    String description;
-    Result<TomlValue*> parsed = parseToml(manifestText);
-    if !parsed.isOk() { return description; }
-    TomlValue* root = parsed.unwrap();
-    TomlValue* packageTable = root.getFieldOrNil("package");
-    if packageTable != nil<TomlValue*> && packageTable.isTable() {
-        TomlValue* value = packageTable.getFieldOrNil("description");
-        if value != nil<TomlValue*> && value.isString() {
-            const String raw = value.getString();
-            description = head(raw.trim(), 500l);
-        }
-    }
-    deleteTomlValue(root);
-    return description;
+    const Manifest manifest = readManifest(manifestText);
+    const String description = manifest.description.trim();
+    return head(description, 500l);
 }
 
 /**
@@ -452,7 +419,7 @@ public f<String> syncWriteBatch(const Ctx& ctx, const Vector<SyncJob>& jobs, int
                                 Sql dep = Sql("INSERT INTO package_dependencies (version_id, dep_name, constraint_text, dev) VALUES (@vid, ");
                                 dep.ps(deps.get(d).name);
                                 dep.sql(", ");
-                                dep.ps(deps.get(d).constraint);
+                                dep.ps(deps.get(d).version);
                                 dep.sql(", ");
                                 dep.pn(deps.get(d).dev ? 1l : 0l);
                                 dep.sql(")");
@@ -560,7 +527,7 @@ f<bool> testReleasesOfSubdirectory() {
 }
 
 #[test]
-f<bool> testParseManifest() {
+f<bool> testReleaseManifest() {
     String manifest = String("# A comment\n[package]\nname = \"x\"\nversion = \"0.1.0\"\n\n");
     manifest += "[dependencies]\n";
     manifest += "json-parser = \"^1.2.0\"  # short form\n";
@@ -568,17 +535,24 @@ f<bool> testParseManifest() {
     manifest += "http-utils = { github = \"owner/Http-Utils\", rev = \"v1.0.0\" }\n";
     manifest += "my-local = { path = \"../my-local\" }\n";
     manifest += "Bad_Name = \"1\"\n";
+    manifest += "my_lib = \"^1.0.0\"\n";
+    manifest += "broken = \"latest\"\n";
     manifest += "\n[dev-dependencies]\ntest-kit = \"~1.2.0\"\njson-parser = \"*\"\n";
     manifest += "\n[tool.some-linter]\nmax-line = 120\n";
     const Vector<Dependency> deps = parseManifestDependencies(manifest);
     assert deps.getSize() == 3l;
     assert deps.get(0l).name == "json-parser";
-    assert deps.get(0l).constraint == "^1.2.0";
+    assert deps.get(0l).version == "^1.2.0";
     assert !deps.get(0l).dev;
     assert deps.get(1l).name == "http-client";
-    assert deps.get(1l).constraint == ">=1.0, <2";
+    assert deps.get(1l).version == ">=1.0, <2";
     assert deps.get(2l).name == "test-kit";
     assert deps.get(2l).dev;
+
+    // A dependency is read even if the rest of the manifest is invalid
+    const Vector<Dependency> partial = parseManifestDependencies(String("[package]\nverison = \"1\"\n[dependencies]\nhttp-client = \"^1.0.0\"\n"));
+    assert partial.getSize() == 1l;
+    assert partial.get(0l).version == "^1.0.0";
 
     // Old JSON manifests and other broken files declare nothing
     const Vector<Dependency> none = parseManifestDependencies(String("{ \"dependencies\": { \"json-parser\": \"^1.2.0\" } }"));

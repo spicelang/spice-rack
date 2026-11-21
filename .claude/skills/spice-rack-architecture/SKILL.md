@@ -42,7 +42,7 @@ browser ──HTTP──▶ host/app.mjs ──▶ rackStep(envelope JSON) ─�
 | wasm exports, router | `src/main.spice` | `rackStep`, `route`, `routeApi`. Every `public` `rack*` function is exported by `scripts/build-wasm.sh` |
 | Request context, SQL builder, batches, responses | `src/core.spice` | `Ctx`, `Sql` (`ps`/`pn` = placeholder + param), `Batch`, `Ctx.respond` & friends |
 | libc shim for wasm | `src/libc.spice` | Bump allocator, `memcpy`, `strtoll`/`strtod`, `snprintf` (number formatting of the std), … that the Spice runtime needs |
-| Shared helpers | `src/util.spice` | String/URL helpers, `isValidPackageName` / `packageNameRule` (single source of the name rule) |
+| Shared helpers | `src/util.spice` | String/URL helpers, `packageNameRule` (the name rule `isValidRegistryName` of the `manifest` package in words) |
 | JSON | `src/json.spice` | `JV` (read-only view of parsed JSON) and `JsonWriter` |
 | Templates | `src/template.spice`, `src/layout.spice`, `templates/` | `View` and `TemplateSet` over the `template` package (Rack's filters, `stripIndentation`); `renderPage` wraps a page in `templates/layout.html` |
 | Public pages | `src/pages_public.spice`, `src/search.spice` | Home, search, docs, robots/sitemap/OpenSearch |
@@ -51,7 +51,7 @@ browser ──HTTP──▶ host/app.mjs ──▶ rackStep(envelope JSON) ─�
 | Maintainer dashboard | `src/dashboard.spice` | Create / manage / sync / delete packages (also used by admins via `adminMode`) |
 | Admin | `src/admin.spice` | Usage overview, user and package management |
 | JSON API | `src/api.spice` | `/api/v1/...`, download counting + redirect to the GitHub archive |
-| GitHub sync | `src/github.spice`, `src/tasks.spice` | Releases, README, `spice.toml` (`parseManifestDependencies`), monorepo tag matching |
+| GitHub sync | `src/github.spice`, `src/tasks.spice` | Releases, README, `spice.toml` (`readManifest` with the `manifest` package), monorepo tag matching |
 | Semver | `semver` package (`src/spice_packages/semver/semver.spice`) | Versions and constraint rules, shared with Spice Shaker; see Cross-repo contracts |
 | Spice packages | `src/spice.toml`, `src/spice.lock` | Dependencies of the Spice code, installed to `src/spice_packages/` (git-ignored) with `cd src && spice-shaker sync` |
 | Code highlighting | `src/highlight.spice` | Spice code blocks in READMEs and changelogs |
@@ -64,8 +64,10 @@ browser ──HTTP──▶ host/app.mjs ──▶ rackStep(envelope JSON) ─�
 
 ## Cross-repo contracts
 
-- The manifest format (`spice.toml`) is owned by [Spice Shaker](https://github.com/spicelang/spice-shaker)
-  (`media/manifest-spec.md`). The registry only reads registry dependencies of `[dependencies]` / `[dev-dependencies]`.
+- The manifest format (`spice.toml`) is specified and implemented by the `manifest` package of spicelang/packages, which
+  [Spice Shaker](https://github.com/spicelang/spice-shaker) and the compiler use as well. The registry only reads registry
+  dependencies of `[dependencies]` / `[dev-dependencies]` and the `description`. Its `isValidRegistryName` is the rule
+  for package names in the registry.
 - Spice Shaker consumes the JSON API (`/api/v1/packages/{name}`, `.../versions/{version}/download`, the `path` field for
   packages in a subdirectory). Changing the API shape breaks the package manager.
 - [spicelang/packages](https://github.com/spicelang/packages) is the reference monorepo: tags like `github-v0.2.0`.
@@ -77,4 +79,7 @@ browser ──HTTP──▶ host/app.mjs ──▶ rackStep(envelope JSON) ─�
 ## Spice quirks met in this code
 
 Method calls cannot be chained on call results (`a.b().c()` → use a temporary), globals must be `UPPER_CASE`, struct
-fields need `public` to be used from another file, and `result` / `p` are reserved as variable names.
+fields need `public` to be used from another file, and `result` / `p` are reserved as variable names. Functions, types
+and `#[test]` functions share one namespace with the Spice packages and the std, so a name clash is an error. The wasm
+build is freestanding: a module that imports an OS-only std module (`std/io/file`, `std/io/dir`, `std/os/*`, …, marked
+`#![core.compiler.requiresOs]`), directly or via a package, cannot be compiled to wasm.

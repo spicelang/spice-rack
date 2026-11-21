@@ -80,7 +80,8 @@ git checkout <type>/<slug>             # continue on the branch
 ## Repository rules
 
 - Schema changes go into a new numbered file in `db/migrations/`. Never edit a migration that was already released.
-- Package names are lower kebab-case; the rule lives only in `isValidPackageName` / `packageNameRule` (`src/util.spice`).
+- Package names are lower kebab-case; the rule lives only in `isValidRegistryName` of the `manifest` package, worded by
+  `packageNameRule` (`src/util.spice`).
 - The JSON API is consumed by Spice Shaker: add fields instead of renaming or removing them.
 - Release images are published by pushing a `v*` tag (`.github/workflows/release.yml`); pushes to `main` publish the
   `staging` image. Leave tagging to the maintainers.

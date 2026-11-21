@@ -7,7 +7,7 @@ description: Recipe for adding or changing a page, form action, JSON API endpoin
 
 Read `spice-rack-architecture` first for the step/effect protocol. The checklist:
 
-1. **Route** it in `route` / `routeApi` (`src/main.spice`). Validate path segments there (e.g. `isValidPackageName`)
+1. **Route** it in `route` / `routeApi` (`src/main.spice`). Validate path segments there (e.g. `isValidRegistryName`)
    and pass decoded values (`urlDecode`) to the handler.
 2. **Handler** `public f<String> handleX(Ctx& ctx)` in the module of its area (see the table in
    `spice-rack-architecture`); a new module must be imported by `src/main.spice` *and* `src/tests.spice`.
@@ -55,7 +55,8 @@ public f<String> handleThing(Ctx& ctx, const String& name) {
 - `ctx.user.present` (else `requireLogin(ctx)`), `ctx.isAdmin()`; owners are checked against `owner_id` (see `src/dashboard.spice`).
 - Every state-changing POST checks `ctx.csrfOk()` and returns `forbidden(ctx)` otherwise; forms include
   `{% include "partials/csrf" %}`. Read fields with `ctx.formTrim("field")` / `ctx.form.get("field")`.
-- Name rules come from `src/util.spice` (`isValidPackageName`, `packageNameRule`), so forms and errors cannot drift.
+- Package names follow `isValidRegistryName` of the `manifest` package; `packageNameRule()` (`src/util.spice`) words it
+  for forms and errors, so they cannot drift.
 
 ## Templates
 

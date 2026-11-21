@@ -1,6 +1,8 @@
 import "std/data/vector";
 import "std/text/analysis";
+import "std/text/format";
 import "std/text/string-ext";
+import "spice_packages/manifest/manifest";
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Small string helpers shared by all other modules. Everything here is pure, so it can be unit-tested natively.
@@ -335,40 +337,14 @@ public f<bool> isLowerAlnum(char c) {
     return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
 }
 
+// The names of packages follow isValidRegistryName of the manifest package (lower kebab-case, like my-package), GitHub
+// owners and repositories isValidGithubName. Its isValidPackageName is the looser rule for dependencies outside the registry.
+
 /**
- * The rule in words, shown in forms and error messages (keep in sync with `isValidPackageName`)
+ * The rule of package names in words, shown in forms and error messages
  */
 public f<String> packageNameRule() {
-    return String("Package names are lower kebab-case, like my-package: 2-64 lowercase letters and digits, separated by single hyphens.");
-}
-
-/**
- * Package names are lower kebab-case: 2-64 characters, lowercase letters and digits in words separated by single '-'.
- * They cannot start or end with '-'.
- */
-public f<bool> isValidPackageName(const String& name) {
-    const unsigned long len = name.getLength();
-    if len < 2l || len > 64l || !isLowerAlnum(name[0l]) || !isLowerAlnum(name[len - 1l]) { return false; }
-    for unsigned long i = 1l; i < len; i++ {
-        const char c = name[i];
-        if c == '-' { if name[i - 1l] == '-' { return false; } continue; }
-        if !isLowerAlnum(c) { return false; }
-    }
-    return true;
-}
-
-/**
- * GitHub owner and repository names: letters, digits, '-', '_' and '.'
- */
-public f<bool> isValidGithubName(const String& name) {
-    const unsigned long len = name.getLength();
-    if len < 1l || len > 100l { return false; }
-    for unsigned long i = 0l; i < len; i++ {
-        const char c = name[i];
-        const bool ok = isLowerAlnum(c) || (c >= 'A' && c <= 'Z') || c == '-' || c == '_' || c == '.';
-        if !ok { return false; }
-    }
-    return true;
+    return capitalize(registryNameRule()) + ".";
 }
 
 /**
@@ -506,15 +482,10 @@ f<bool> testDates() {
 
 #[test]
 f<bool> testValidation() {
-    assert isValidPackageName(String("json-parser"));
-    assert !isValidPackageName(String("Json"));
-    assert !isValidPackageName(String("a"));
-    assert !isValidPackageName(String("-abc"));
-    assert !isValidPackageName(String("abc-"));
-    assert !isValidPackageName(String("a--b"));
-    assert !isValidPackageName(String("json_parser"));
-    assert !isValidPackageName(String("json.parser"));
-    assert isValidPackageName(String("web-server-2"));
+    // The registry's names are the manifest package's registry names, not its looser package names
+    assert isValidRegistryName(String("web-server-2"));
+    assert !isValidRegistryName(String("json_parser")) && isValidPackageName(String("json_parser"));
+    assert packageNameRule().startsWith("Registry names are lower kebab-case") && packageNameRule().endsWith(".");
     assert normalizeTag(String("  Web Server ")) == "web-server";
     const Vector<String> tags = parseTags(String("Web, cli, web;;Net_Utils"));
     assert tags.getSize() == 3l;
