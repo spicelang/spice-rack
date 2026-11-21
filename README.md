@@ -53,7 +53,7 @@ that is reset for every call, `memcpy`, ...). See `scripts/build-wasm.sh` for wh
 
 ```
 src/            Spice sources (main.spice = router and wasm exports, one file per area; unit tests sit next to the code)
-                and spice.toml / spice.lock for the Spice packages it uses (semver), installed to src/spice_packages/
+                and spice.toml / spice.lock for the Spice packages it uses (manifest, semver, template), installed to src/spice_packages/
 templates/      HTML and XML templates for every page, partial and feed
 host/           Node.js host, MySQL pool, migrations runner, end-to-end tests (host/test), demo seeding (host/dev)
 db/migrations/  MySQL schema, applied in file name order on startup (tracked in the `schema_migrations` table)
@@ -148,10 +148,12 @@ http-client = { version = ">=2.0.0, <3.0.0" }
 test-kit = "*"
 ```
 
-The manifest format is specified by [Spice Shaker](https://github.com/spicelang/spice-shaker), the Spice package manager. The registry
-only lists the registry dependencies of `[dependencies]` and `[dev-dependencies]`; GitHub and path dependencies are skipped. The parsing
-lives in `parseManifestDependencies` in `src/github.spice` and uses the TOML parser of the std (for the wasm build, `src/libc.spice`
-provides the `strtoll`/`strtod` it needs).
+The manifest format is specified by the [manifest package](https://github.com/spicelang/packages/tree/main/packages/manifest), which
+[Spice Shaker](https://github.com/spicelang/spice-shaker), the Spice package manager, uses as well. The registry only lists the registry
+dependencies of `[dependencies]` and `[dev-dependencies]`; GitHub and path dependencies are skipped, and so are dependencies with an
+invalid name or version constraint. `readManifest` in `src/github.spice` reads a manifest with the package and keeps its valid parts even
+if others are invalid. The package uses the TOML parser of the std (for the wasm build, `src/libc.spice` provides the `strtoll`/`strtod`
+it needs).
 
 **Several packages in one repository** (like [spicelang/packages](https://github.com/spicelang/packages)): every package lives in its
 own directory (`packages/github`) with its own `spice.toml` and README, and is created with that directory (`repo_path`). Its releases
@@ -180,13 +182,13 @@ scripts/test.sh                       # Spice unit tests + wasm build + host tes
 ```
 
 Schema changes go into a new, numbered file in `db/migrations/` (never edit one that was already released). Package names must be
-lower kebab-case; the rule lives in `isValidPackageName` / `packageNameRule` in `src/util.spice`, so forms and error messages
-cannot drift from the check. On startup the host logs a warning for packages whose names predate that rule.
+lower kebab-case; the rule is `isValidRegistryName` of the manifest package (not its looser `isValidPackageName`), and
+`packageNameRule` in `src/util.spice` words it for forms and error messages, so they cannot drift from the check. On startup the host logs a warning for packages whose names predate that rule.
 
 Template files are read at startup, so restart the host after changing one (the wasm module only needs a rebuild when Spice code
 changes). Spice quirks met on the way, in case you touch the code: method calls cannot be chained on call results (`a.b().c()`), globals must be
-`UPPER_CASE`, struct fields need `public` to be used from another file, and `result`/`p` are reserved as variable names. If tests behave
-strangely after a struct that other files use inside a `Vector<…>` changed, build once with `--ignore-cache`.
+`UPPER_CASE`, struct fields need `public` to be used from another file, and `result`/`p` are reserved as variable names. Function names,
+`#[test]` functions included, share one namespace with those of the Spice packages and the std, so a clash is an error.
 
 ## Notes and limits
 

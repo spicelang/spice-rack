@@ -1,5 +1,6 @@
 import "std/data/vector";
 import "std/text/string-ext";
+import "spice_packages/manifest/manifest";
 import "./util";
 import "./json";
 import "./core";
@@ -212,7 +213,7 @@ public f<String> handleCreatePackage(Ctx& ctx, bool adminMode) {
     const bool pathValid = formRepoPath(ctx, linkPath, path);
     if !pathValid { errors.pushBack(repoPathRule()); }
     if name.isEmpty() && repoValid && pathValid { name = suggestName(path.isEmpty() ? repo : lastPathSegment(path)); }
-    if repoValid && !isValidPackageName(name) { errors.pushBack(packageNameRule()); }
+    if repoValid && !isValidRegistryName(name) { errors.pushBack(packageNameRule()); }
     const String homepage = ctx.formTrim("homepage");
     if !homepage.isEmpty() && (!isHttpUrl(homepage) || homepage.getLength() > 255l) { errors.pushBack(String("The homepage must be an http(s) URL.")); }
     const String description = head(ctx.formTrim("description"), 500l);
@@ -443,7 +444,7 @@ public f<String> handleManagePackage(Ctx& ctx, const String& name, bool adminMod
         if !homepage.isEmpty() && (!isHttpUrl(homepage) || homepage.getLength() > 255l) { errors.pushBack(String("The homepage must be an http(s) URL.")); }
         if adminMode {
             newName = lower(ctx.formTrim("name"));
-            if !isValidPackageName(newName) { errors.pushBack(String("Invalid package name.")); }
+            if !isValidRegistryName(newName) { errors.pushBack(String("Invalid package name.")); }
             if !parseRepoRef(ctx.form.get("repo"), newOwner, newRepo, linkPath) { errors.pushBack(String("Please enter the repository as owner/name.")); }
             if !formRepoPath(ctx, linkPath, newPath) { errors.pushBack(repoPathRule()); }
             if maintainer.isEmpty() { errors.pushBack(String("Please enter the maintainer's GitHub login.")); }

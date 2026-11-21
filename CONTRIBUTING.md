@@ -15,6 +15,5 @@ The [Development section of the README](https://github.com/spicelang/spice-rack#
 
 * You need the Spice compiler and `wasm-ld` (package `lld`). Make sure `SPICE=/path/to/spice` points at the real compiler, because a `spice` on your `PATH` may be a different tool.
 * `scripts/test.sh` runs the Spice unit tests, builds the WebAssembly module and runs the host tests. Set `E2E_DB_NAME=<name>_test` (plus `E2E_DB_PORT` etc.) to include the end-to-end tests against a throw-away MySQL database. All tables in that database are dropped.
-* If tests behave strangely after you changed a struct that other files use, rebuild once with `--ignore-cache`.
 * `cd host && npm run lint` runs ESLint and Stylelint. CI runs it as well.
 * Schema changes go into a new numbered file in `db/migrations/`. Never edit a migration that was already released.

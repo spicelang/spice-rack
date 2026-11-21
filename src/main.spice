@@ -1,5 +1,6 @@
 import "std/data/vector";
 import "std/text/string-ext";
+import "spice_packages/manifest/manifest";
 import "./libc";
 import "./util";
 import "./json";
@@ -40,7 +41,7 @@ f<String> routeApi(Ctx& ctx, const Vector<String>& segments) {
     if resource == "packages" {
         if count == 3l { return handleApiPackages(ctx); }
         const String name = urlDecode(segments.get(3l));
-        if !isValidPackageName(name) { return handleApiNotFound(ctx); }
+        if !isValidRegistryName(name) { return handleApiNotFound(ctx); }
         if count == 4l { return handleApiPackage(ctx, name); }
         if count >= 6l && segments.get(4l) == "versions" {
             const String version = urlDecode(segments.get(5l));
@@ -86,7 +87,7 @@ f<String> route(Ctx& ctx) {
         if first == "packages" {
             if count == 1l { return handleSearch(ctx); }
             const String name = urlDecode(segments.get(1l));
-            if count == 2l && isValidPackageName(name) { return handlePackagePage(ctx, name); }
+            if count == 2l && isValidRegistryName(name) { return handlePackagePage(ctx, name); }
             return notFound(ctx);
         }
         if first == "docs" && count == 2l && segments.get(1l) == "publishing" { return handlePublishingDocs(ctx); }
@@ -107,7 +108,7 @@ f<String> route(Ctx& ctx) {
         if count >= 2l && segments.get(1l) == "packages" {
             if count == 3l && segments.get(2l) == "new" { return handleCreatePackage(ctx, false); }
             const String name = urlDecode(count >= 3l ? segments.get(2l) : String(""));
-            if count == 3l && isValidPackageName(name) { return handleManagePackage(ctx, name, false); }
+            if count == 3l && isValidRegistryName(name) { return handleManagePackage(ctx, name, false); }
         }
         return notFound(ctx);
     }
@@ -123,7 +124,7 @@ f<String> route(Ctx& ctx) {
             if count == 2l && isGet { return handleAdminPackages(ctx); }
             if count == 3l && segments.get(2l) == "new" { return handleCreatePackage(ctx, true); }
             const String name = urlDecode(count >= 3l ? segments.get(2l) : String(""));
-            if count == 3l && isValidPackageName(name) { return handleManagePackage(ctx, name, true); }
+            if count == 3l && isValidRegistryName(name) { return handleManagePackage(ctx, name, true); }
         }
         return notFound(ctx);
     }

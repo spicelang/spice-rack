@@ -34,7 +34,7 @@ jobs:
       - name: Set up Spice
         uses: spicelang/spice-setup-action@v1
         with:
-          spice-version: 0.29.3
+          spice-version: 0.30.1
 
       # The Spice release ships the package manager next to the compiler. It has to reproduce the committed lock file.
       - name: Install Spice packages

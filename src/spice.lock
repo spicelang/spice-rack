@@ -2,6 +2,13 @@
 version = 1
 
 [[package]]
+name = "manifest"
+source = "registry"
+version = "0.1.1"
+checksum = "sha256-tree:8b7d502ce426341fda34915c96a63de81b4f27b88796398d43933da5ef50e4d7"
+dependencies = ["semver"]
+
+[[package]]
 name = "semver"
 source = "registry"
 version = "0.1.0"
@@ -11,6 +18,6 @@ dependencies = []
 [[package]]
 name = "template"
 source = "registry"
-version = "0.1.1"
-checksum = "sha256-tree:8c54ff134c148244fc2ad631aa000f9daaa79c0703df4a2c99d1bdcce69edbbc"
+version = "0.2.0"
+checksum = "sha256-tree:dab57b6c976ee15deaec933ef3c3ace91ca0229a2eeb7757bf3a22daf0b31fca"
 dependencies = []
