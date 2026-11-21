@@ -1,9 +1,13 @@
 // Minimal libc replacement for the wasm32 build.
 //
 // WebAssembly modules cannot link against the C library, but the Spice runtime and std (String, Vector, ...) rely on
-// a handful of its functions. They are provided here. Memory is handed out by a bump allocator over a region the host
+// a handful of its functions. The freestanding runtime of Spice brings memcpy, memmove, memset, memcmp, bcmp, strlen and
+// strcmp; the others are provided here. Memory is handed out by a bump allocator over a region the host
 // passes in via rackInit(). Since every request is handled by a stateless call, the host simply resets the arena
 // before each request, so free() can be a no-op and there is no fragmentation to worry about.
+
+// From the freestanding runtime of Spice
+ext f<heap byte*> memcpy(heap byte*, heap byte*, unsigned long);
 
 long ARENA_START = 0l;
 long ARENA_END = 0l;
@@ -71,63 +75,6 @@ public f<heap byte*> realloc(heap byte* ptr, unsigned long size) {
         if newPtr == nil<heap byte*> { return nil<heap byte*>; }
         memcpy(newPtr, cast<heap byte*>(oldAddr), size);
         return newPtr;
-    }
-}
-
-#[core.compiler.mangle = false]
-public f<heap byte*> memcpy(heap byte* dst, heap byte* src, unsigned long n) {
-    unsafe {
-        byte* d = cast<byte*>(dst);
-        byte* s = cast<byte*>(src);
-        for unsigned long i = 0l; i < n; i++ { d[i] = s[i]; }
-    }
-    return dst;
-}
-
-#[core.compiler.mangle = false]
-public f<heap byte*> memmove(heap byte* dst, heap byte* src, unsigned long n) {
-    unsafe {
-        byte* d = cast<byte*>(dst);
-        byte* s = cast<byte*>(src);
-        if cast<unsigned long>(d) < cast<unsigned long>(s) {
-            for unsigned long i = 0l; i < n; i++ { d[i] = s[i]; }
-        } else {
-            for unsigned long i = n; i > 0l; i-- { d[i - 1l] = s[i - 1l]; }
-        }
-    }
-    return dst;
-}
-
-#[core.compiler.mangle = false]
-public f<int> memcmp(heap byte* a, heap byte* b, unsigned long n) {
-    unsafe {
-        byte* pa = cast<byte*>(a);
-        byte* pb = cast<byte*>(b);
-        for unsigned long i = 0l; i < n; i++ {
-            if pa[i] != pb[i] { return cast<int>(pa[i]) - cast<int>(pb[i]); }
-        }
-    }
-    return 0;
-}
-
-#[core.compiler.mangle = false]
-public f<unsigned long> strlen(string s) {
-    unsigned long len = 0l;
-    unsafe {
-        byte* bytes = cast<byte*>(s);
-        while bytes[len] != cast<byte>(0) { len++; }
-    }
-    return len;
-}
-
-#[core.compiler.mangle = false]
-public f<int> strcmp(string a, string b) {
-    unsafe {
-        byte* pa = cast<byte*>(a);
-        byte* pb = cast<byte*>(b);
-        unsigned long i = 0l;
-        while pa[i] != cast<byte>(0) && pa[i] == pb[i] { i++; }
-        return cast<int>(pa[i]) - cast<int>(pb[i]);
     }
 }
 

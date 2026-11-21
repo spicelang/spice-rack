@@ -49,7 +49,8 @@ server-rendered HTML + one CSS file; the only scripts are `public/theme.js` (lig
 `public/copy-code.js` (copy buttons on the code blocks of READMEs and changelogs).
 
 Because WebAssembly has no libc, `src/libc.spice` provides the handful of C functions the Spice runtime needs (a bump allocator
-that is reset for every call, `memcpy`, ...). See `scripts/build-wasm.sh` for why `wasm-ld` is invoked directly.
+that is reset for every call, `strtoll`, `snprintf`, ...); `memcpy` and the other memory and string functions come with the
+freestanding runtime of Spice. See `scripts/build-wasm.sh` for why `wasm-ld` is invoked directly.
 
 ```
 src/            Spice sources (main.spice = router and wasm exports, one file per area; unit tests sit next to the code)

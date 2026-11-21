@@ -41,7 +41,7 @@ browser ──HTTP──▶ host/app.mjs ──▶ rackStep(envelope JSON) ─�
 |------|---------|-------|
 | wasm exports, router | `src/main.spice` | `rackStep`, `route`, `routeApi`. Every `public` `rack*` function is exported by `scripts/build-wasm.sh` |
 | Request context, SQL builder, batches, responses | `src/core.spice` | `Ctx`, `Sql` (`ps`/`pn` = placeholder + param), `Batch`, `Ctx.respond` & friends |
-| libc shim for wasm | `src/libc.spice` | Bump allocator, `memcpy`, `strtoll`/`strtod`, `snprintf` (number formatting of the std), … that the Spice runtime needs |
+| libc shim for wasm | `src/libc.spice` | Bump allocator, `strtoll`/`strtod`, `snprintf` (number formatting of the std), … that the Spice runtime needs. `memcpy`, `strlen` & co. come with Spice's freestanding runtime |
 | Shared helpers | `src/util.spice` | String/URL helpers, `packageNameRule` (the name rule `isValidRegistryName` of the `manifest` package in words) |
 | JSON | `src/json.spice` | `JV` (read-only view of parsed JSON) and `JsonWriter` |
 | Templates | `src/template.spice`, `src/layout.spice`, `templates/` | `View` and `TemplateSet` over the `template` package (Rack's filters, `stripIndentation`); `renderPage` wraps a page in `templates/layout.html` |
